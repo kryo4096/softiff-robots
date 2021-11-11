@@ -1,7 +1,7 @@
 import taichi as ti
 import random
 
-ti.init(arch=ti.gpu)
+
 
 '''
     ARCHITECTURE:
@@ -32,8 +32,12 @@ class NeuralNetwork:
         self.layer1 = ti.field(dtype=ti.f32, shape=self.layer1_size)
         self.output = ti.field(dtype=ti.f32, shape=self.output_size)
 
-        self.weights_layer1 = ti.Matrix.field(self.input_size, self.layer1_size, dtype=ti.f32, shape=())
-        self.weights_output = ti.Matrix.field(self.layer1_size, self.output_size, dtype=ti.f32, shape=())
+        self.weights_layer1 = ti.field(dtype=ti.f32, shape=(self.input_size, self.layer1_size), needs_grad=True)
+        self.weights_output = ti.field(dtype=ti.f32, shape=(self.layer1_size, self.output_size), needs_grad=True)
+
+        self.sim = Simulation()
+
+        self.performance = ti.field(ti.f32, (), needs_grad=True)
 
     @ti.kernel
     def init(self, x_init: ti.f32, y_init: ti.f32):
@@ -46,18 +50,63 @@ class NeuralNetwork:
         for i, j in ti.ndrange(self.layer1_size, self.output_size):
             self.weights_output[i, j] = ti.random()
 
-    def get_x_vel(self):
-        return self.output[0]
+    @ti.kernel
+    def update_perfomance(self):
+        self.calculate_loss(self.sim.x[0][0])
+        self.performance[None] = self.loss
 
-    def get_y_vel(self):
-        return self.output[1]
+        self.update_weights()
+        self.eval()
+
+
+
+    @ti.func
+    def update_weights(self):
+
+
+        for i, j in ti.static(ti.ndrange(self.input_size, self.layer1_size)):
+            self.weights_layer1[i, j] += self.weights_layer1.grad[i, j]
+
+
+        for i, j in ti.static(ti.ndrange(self.layer1_size, self.output_size)):
+            self.weights_output[i, j] += self.weights_output.grad[i, j]
+
+
+    def calculate_loss(self, value):
+        self.loss = -value
+
 
     def train(self):
-        pass
+        self.loss = 0
+        while True:
+            self.sim.substep()
+            if self.sim.x[0][1] < 0:
+                #print("Final Distance achieved: ", self.sim.x[0][0])
+                break
 
+        self.update_perfomance()
+        self.update_perfomance.grad()
+
+
+    def get_velocities(self):
+        self.eval()
+        return self.output[0], self.output[1]
+
+    @ti.pyfunc
     def eval(self):
-        self.layer1 = self.weights_layer1.transpose() @ self.inputs
-        self.output = self.weights_output.transpose() @ self.layer1
+        for j in ti.static(range(self.layer1_size)):
+            self.layer1[j] = 0
+
+        for j in ti.static(range(self.output_size)):
+            self.output[j] = 0
+
+
+        for i, j in ti.static(ti.ndrange(self.input_size, self.layer1_size)):
+            self.layer1[j] += self.weights_layer1[i, j] * self.inputs[i]
+
+        for i, j in ti.static(ti.ndrange(self.layer1_size, self.output_size)):
+            self.output[j] += self.weights_output[i, j] * self.layer1[i]
+
 
 
 @ti.data_oriented
@@ -68,10 +117,17 @@ class Simulation:
 
         self.x = ti.Vector.field(2, ti.f32, 1, needs_grad=True)  # position of particles
         self.v = ti.Vector.field(2, ti.f32, 1)  # velocity of particles
-        self.U = ti.field(float, (), needs_grad=True)  # potential energy
+        self.U = ti.field(ti.f32, (), needs_grad=True)  # potential energy
 
         self.m = 1
         self.g = 9.81
+
+    @ti.kernel
+    def init(self, x: ti.f32, y: ti.f32, v_x: ti.f32, v_y: ti.f32):
+        self.x[0] = [x, y]
+        self.v[0] = [v_x, v_y]
+
+        print("Initialized Simulation with p_init ", x, y, " and v_init ", v_x, v_y)
 
     @ti.kernel
     def compute_U(self):
@@ -88,36 +144,25 @@ class Simulation:
             self.compute_U()
         self.advance()
 
-    @ti.kernel
-    def init(self, x: ti.f32, y: ti.f32, v_x: ti.f32, v_y: ti.f32):
-        self.x[0] = [x, y]
-        self.v[0] = [v_x, v_y]
 
+ti.init(arch=ti.gpu)
 gui = ti.GUI('Autodiff gravity')
 nn = NeuralNetwork()
 
-sim = Simulation()
 
 
 while gui.running:
 
     x_init, y_init = random.random(), random.random()
+
     nn.init(x_init, y_init)
 
-    nn.eval()
-
-    x_v_init, y_v_init = nn.get_x_vel(), nn.get_y_vel()
 
 
-    sim.init(x_init, y_init, x_v_init, y_v_init)
+    for i in range(1000):
+        x_v_init, y_v_init = nn.get_velocities()
+        nn.sim.init(x_init, y_init, x_v_init, y_v_init)
+        nn.train()
 
-
-    for i in range(100):
-        sim.substep()
-        if sim.x[0][1] < 0:
-            print("Final Distance achieved: ", sim.x[0][0])
-            gui.running = False
-            break
-
-    gui.circles(sim.x.to_numpy(), radius=8.0)
+    gui.circles(nn.sim.x.to_numpy(), radius=8.0)
     gui.show()
