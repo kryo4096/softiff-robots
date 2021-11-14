@@ -1,110 +1,200 @@
 import taichi as ti
-import random
+import numpy as np
 import math
+import random
 
 
-@ti.data_oriented
-class NeuralNet:
-    #inputs are x, y, v_x, v_y
-    def __init__(self):
-        self.input_size = 4
+import matplotlib.pyplot as plt
 
-        self.input = ti.field(dtype=ti.f32, shape=self.input_size, needs_grad = True)
-        self.weight = ti.field(dtype=ti.f32, shape=self.input_size, needs_grad = True)
-        self.bias = ti.field(dtype=ti.f32, shape=self.input_size, needs_grad = True)
-        self.output = ti.field(dtype=ti.f32, shape=self.input_size)
+ti.init(arch=ti.gpu)
 
-        self.loss = ti.field(dtype=ti.f32, shape=(), needs_grad=True)
+input_size = 4
+hidden_layer_size = 10
+output_size = 4
 
-        self.sim = Simulator()
+input = ti.field(dtype=ti.f32, shape=input_size, needs_grad=True)
+weight_input = ti.Vector.field(input_size, dtype=ti.f32, shape=hidden_layer_size, needs_grad=True)
+bias_input = ti.Vector.field(input_size, dtype=ti.f32, shape=hidden_layer_size, needs_grad=True)
+hidden_layer = ti.field(dtype=ti.f32, shape=hidden_layer_size, needs_grad=True)
+weight_hidden_layer = ti.Vector.field(hidden_layer_size, dtype=ti.f32, shape=output_size, needs_grad=True)
+bias_hidden_layer = ti.Vector.field(hidden_layer_size, dtype=ti.f32, shape=output_size, needs_grad=True)
+output = ti.field(dtype=ti.f32, shape=output_size, needs_grad=True) #Somehow also needs grad even thought its is never accessed
 
-        #self.gui = ti.GUI("Simulation")
-
-        self.initialize()
-
-    def initialize(self):
-        for i in range(self.input_size):
-            self.input[i] = random.random()*10 - 5
-            self.weight[i] = random.random()*100 - 50
-            self.bias[i] = random.random()*100 - 50
-
-    def generate_prediction(self):
-        for i in range(self.input_size):
-            self.output[i] = self.input[i]*self.weight[i] + self.bias[i]
-
-        self.loss[None] = self.sim.run(self.output[0], self.output[1], self.output[2], self.output[3]) #input_size
-        print("Loss was ", self.loss[None])
+loss = ti.field(dtype=ti.f32, shape=(), needs_grad=True)
 
 
-    def update_network(self):
-        for i in range(self.input_size):
-            self.input[i] += self.input.grad[i]
-            self.weight[i] += self.weight.grad[i]
-            self.bias[i] += self.bias.grad[i]
+#learning_rate = 5e-4
+
+dt = 3e-3
+g = -9.81
 
 
-    def do_iteration(self):
-        with ti.Tape(self.loss):
-            self.generate_prediction()
-        self.update_network()
+def init():
+    for i in range(input_size):
+        input[i] = random.random() #* 10 - 5
+        for j in range(hidden_layer_size):
+            weight_input[j][i] = random.random() #* 10 - 5
+            bias_input[j][i] = random.random() #* 10 - 5
+
+    for i in range(output_size):
+        for j in range(hidden_layer_size):
+            weight_hidden_layer[j][i] = random.random() #* 10 - 5
+            bias_hidden_layer[j][i] = random.random() #* 10 - 5
+        output[i] = 0
+
+    loss[None] = 0.0
 
 
-    def dump_parameters(self):
-        print("Weights:")
-        for i in range(self.input_size):
-            print(self.weight[i])
-        print("Weight gradients:")
-        for i in range(self.input_size):
-            print(self.weight.grad[i])
-        print("Biases:")
-        for i in range(self.input_size):
-            print(self.bias[i])
-        print("Biasgradients:")
-        for i in range(self.input_size):
-            print(self.bias.grad[i])
+@ti.func
+def check_initial_conditions():
+    x, y, v_x, v_y = output[0], output[1], output[2], output[3]
+    return_value = 0.0
+    if x < 0:
+        #print("Violated lower x")
+        return_value += x
+    elif x > 10:
+        #print("Violated upper x")
+        return_value += 10-x # x optimum at 100
+    if y < 0:
+        #print("Violated lower y")
+        return_value += y
+    elif y > 10:
+        #print("Violated upper y")
+        return_value += 10-y # y optimum at 100
+    if v_x < 0:
+        #print("Violated lower v_x")
+        return_value += v_x # velocity should be in the positive x-direction
+    if v_x**2> 10:
+        #print("Violated upper vel x")
+        return_value += 10-v_x**2 ## velocity should not be too high
+    if v_y**2 > 10:
+        return_value += 10-v_y**2
+
+    #Guarantee Smoothness for function if initial conditions are violated!
+
+    '''
+    if return_value == 0: print("No initial conditions violated for simulation")
+    else: print("Initial condition violation of magnitude ", return_value)
+    '''
+    return return_value
 
 
+@ti.func
+def simulate():
+    x, y, v_x, v_y = output[0], output[1], output[2], output[3]
+    return_value = 0.0
+    initial_cond = check_initial_conditions()
+    #print("Initial iteration values: ", x, y, v_x, v_y)
+    for _ in ti.static(range(300)):
+        v_y += g*dt
+        x += v_x*dt
+        y += v_y*dt
+        if return_value == 0 and y < 0:
+            #print("Simulation reached distance of ", x)
+            return_value = x
+    if return_value == 0 and y > 0:
+        return_value = max(x-y, 0)
 
-@ti.data_oriented
-class Simulator:
-    def __init__(self):
-        self.delta_t = 1e-5
-        self.g = -9.81
+    #print("Final iteration values:   ", x, y, v_x, v_y, "and ", return_value)
+    return return_value + initial_cond*10
 
-    def run(self, x_0: ti.f32, y_0: ti.f32, v_x: ti.f32, v_y: ti.f32):
-        x, y = x_0, y_0
-        if x < 0: y = -1
-        if y < 0: x = y
-        if math.sqrt(v_x**2 + v_y**2) > 1:
-            y = -1
-            x = -math.sqrt(v_x**2 + v_y**2) + 1
-        #iter_count = 0
-        while y > 0:
-            v_y += self.g * self.delta_t
-            x += v_x * self.delta_t
-            y += v_y * self.delta_t
-            '''
-            if iter_count % 30 == 0:
-                x_pos: float = x
-                y_pos: float = y
-                pos = np.array([x_pos, y_pos])
-                gui.circle(pos, color=0xFF0000)
-            ++iter_count
-            '''
-        return x
-7
+def graphical_simulate(x, y, v_x, v_y):
+    return_value = 0.0
+    #initial_cond = check_initial_conditions()
+    print("Initial iteration values: ", x, y, v_x, v_y)
+    gui = ti.GUI("NeuralNetwork Simulator")
+    for _ in range(1000):
+        v_y += g*dt
+        x += v_x*dt
+        y += v_y*dt
+        if return_value == 0 and y < 0:
+            #print("Simulation reached distance of ", x)
+            return_value = x
+        l_start = np.array([0, 0.5])
+        p = np.array([x/40+0.5, y/40+0.5])
+        gui.circle(p, radius=10, color=0xFF0000)
 
-def main():
-    ti.init(arch=ti.gpu)
-    #gui = ti.GUI('Autodiff example')
+        gui.show()
 
-    nn = NeuralNet()
+    if return_value == 0 and y > 0:
+        return_value = max(x-y, 0)
 
-    for i in range(10):
-        nn.do_iteration()
-        nn.dump_parameters()
+    print("Final iteration values:   ", x, y, v_x, v_y, "and ", return_value)
 
 
+@ti.kernel
+def calculate_loss():
+    value = simulate()
+    loss[None] = -value
 
-if __name__ == "__main__":
-    main()
+
+@ti.kernel
+def clear_variables():
+    loss[None] = 0
+    for i in ti.static(range(hidden_layer_size)):
+        hidden_layer[i] = 0
+    for i in ti.static(range(output_size)):
+        output[i] = 0
+
+
+@ti.kernel
+def get_output():
+    for i in ti.static(range(input_size)):
+        for j in ti.static(range(hidden_layer_size)):
+            hidden_layer[j] += input[i] * weight_input[j][i] + bias_input[j][i]
+    for i in ti.static(range(output_size)):
+        for j in ti.static(range(hidden_layer_size)):
+            output[i] += hidden_layer[j] * weight_hidden_layer[j][i] + bias_hidden_layer[j][i]
+
+
+def do_iter():
+    get_output()
+    #print("Output is ", output[None])
+    calculate_loss()
+    #print("Loss is", loss[None])
+
+
+def update_variables(index):
+    learning_rate = 1e-5
+    for i in range(input_size):
+        for j in range(hidden_layer_size):
+            weight_input[j][i] -= learning_rate * weight_input.grad[j][i]
+            bias_input[j][i] -= learning_rate * bias_input.grad[j][i]
+    for i in range(hidden_layer_size):
+        for j in range(output_size):
+            weight_hidden_layer[i][j] -= learning_rate * weight_hidden_layer.grad[i][j]
+            bias_hidden_layer[i][j] -= learning_rate * bias_hidden_layer.grad[i][j]
+
+
+init()
+
+graphical_simulate(9.93513298034668, 5.346199035644531, 2.7409629821777344, -1.5206743478775024)
+
+#print("Initial x is: ", x[None], "Initial weight is: ", weight[None], "Initial bias is: ", bias[None], "Initial result is", x[None]*weight[None] + bias[None])
+print("Starting NN...")
+loss_arr = []
+iterations = []
+for i in range(1000):
+    loss_arr.append(loss[None])
+    iterations.append(i)
+
+    clear_variables()
+    with ti.Tape(loss):
+        do_iter()
+
+    if i % 100 == 0:
+        print("Loss at iteration ", i, " is ", loss[None])
+        print("Final values are ", output[0], output[1], output[2], output[3])
+
+    update_variables(i)
+
+
+print("Ended with loss of ", loss[None])
+print("Ended with parameters", output[0], output[1], output[2], output[3], math.atan2(output[3], output[2]))
+
+graphical_simulate(output[0], output[1], output[2], output[3])
+
+plt.plot(iterations, loss_arr)
+plt.show()
+
+#print("New x is: ", x[None], "New weight is: ", weight[None], "New bias is: ", bias[None], "New result is ", x[None]*weight[None] + bias[None])
