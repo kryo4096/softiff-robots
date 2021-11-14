@@ -1,6 +1,8 @@
 import taichi as ti
 import random
 
+import matplotlib.pyplot as plt
+
 ti.init(arch=ti.gpu)
 
 
@@ -16,7 +18,7 @@ loss_2 = ti.field(dtype=ti.f32, shape=(), needs_grad=True)
 target = 5
 
 learning_rate = 1e-3
-learning_rate_2 = 1e-2
+learning_rate_2 = 1e-3
 
 
 def init():
@@ -47,7 +49,7 @@ def get_output_2():
 
 @ti.kernel
 def calculate_loss():
-    loss[None] = ti.abs(output[None] - x_2[None])
+    loss[None] = ti.abs(output[None] - output_2[None])
 
 
 @ti.kernel
@@ -65,16 +67,17 @@ def update_var_2():
 
 
 def main_loop_2():
-    while True:
-        clear_output_2()
-        with ti.Tape(loss_2):
-            do_iter_2()
-        if loss_2[None] > 0.1: update_var_2()
-        else: break
+    clear_output_2()
+    with ti.Tape(loss_2):
+        do_iter_2()
+    if loss_2[None] > 0.01: update_var_2()
 
 
-def do_iter():
-    main_loop_2()
+def do_iter(loss_value):
+    rand = random.random()
+    if loss_2[None] > 0.01 and rand > loss_value:
+        main_loop_2()
+
     get_output()
     calculate_loss()
 
@@ -84,13 +87,27 @@ def update_var():
         x[i] -= learning_rate * x.grad[i]
 
 
-init()
-while (loss[None] > 0.1) or (loss_2[None] > 0.1):
-    clear_output()
-    with ti.Tape(loss):
-        do_iter()
-    if loss[None] > 0.1: update_var()
+num_iter = 0
+iter = []
+t = []
+o_1 = []
+o_2 = []
 
+init()
+while (loss[None] > 0.01) or (loss_2[None] > 0.01):
+    clear_output()
+    l = loss[None]
+    with ti.Tape(loss):
+        do_iter(l)
+    if loss[None] > 0.01: update_var()
+
+
+    iter.append(num_iter)
+    t.append(target)
+    o_1.append(output[None])
+    o_2.append(output_2[None])
+
+    num_iter += 1
     print("Values of first NN is", x[0] + x[1] + x[2] + x[3], \
       "\nValues of second NN are", x_2[None], "and target is", target, \
       "\nLosses are", loss[None], "and", loss_2[None])
@@ -98,3 +115,10 @@ while (loss[None] > 0.1) or (loss_2[None] > 0.1):
 
 print("Final Values are", x[0], x[1], x[2], x[3], "and sum of", x[0] + x[1] + x[2] + x[3], \
       "Final Values of second NN are", x_2[None], "and target is", target)
+
+plt.plot(iter, t, label="target")
+plt.plot(iter, o_1, color="r", label="output outer network")
+plt.plot(iter, o_2, color="g", label="output inner network")
+
+plt.legend()
+plt.show()
