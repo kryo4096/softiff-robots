@@ -70,82 +70,107 @@ class Mesh:
 @ti.data_oriented
 class SoftbodySim:
     def __init__(self,mesh, dt=0.1):
-        self.dt = dt
-        self.n = len(mesh.vertices)
-        self.tris = int(len(mesh.indices) / 3)
-        self.vertices = ti.Vector.field(2, ti.f32, shape=self.n)
-        self.displacement = ti.Vector.field(2, ti.f32, shape=self.n, needs_grad=True)
-        self.velocities = ti.Vector.field(2, ti.f32, shape=self.n)
-        self.positions = ti.Vector.field(2, ti.f32, shape=self.n)
-        self.colors = ti.Vector.field(3, ti.f32, shape=self.n)
-
-        self.A = ti.Matrix.field(2,2, ti.f32, shape=self.tris)
-        self.V = ti.field(ti.f32, shape=self.tris)
+        self.dt = dt # time step
         
-        self.E = ti.field(ti.f32, shape=(), needs_grad=True)
-        self.E_m = ti.field(ti.f32, shape=(), needs_grad=True)
-        self.E_c = ti.field(ti.f32, shape=(), needs_grad=True)
-
-        self.indices = ti.field(ti.i32, shape=len(mesh.indices))
-        
+        # constant fields (given by user)
+        self.n = len(mesh.vertices) #number of vertices in the softbody
+        self.tris = int(len(mesh.indices) / 3) #number of triangles
+        self.vertices = ti.Vector.field(2, ti.f32, shape=self.n) # undeformed positions
+        self.indices = ti.field(ti.i32, shape=len(mesh.indices)) # triangle index list
+        self.colors = ti.Vector.field(3, ti.f32, shape=self.n) # vertex colors
+       
+        # initialize constant fields from mesh object
         vs, ps, inds, cs = mesh.as_np_arrays()
 
         self.vertices.from_numpy(vs)
         self.indices.from_numpy(inds)
-        self.velocities.from_numpy(ps)
         self.colors.from_numpy(cs)
 
-        self.init()
+        # precomputable fields
+        self.V = ti.field(ti.f32, shape=self.tris) # triangle areas
+        self.A = ti.Matrix.field(2,2, ti.f32, shape=self.tris) #triangle mappings (world vectors -> reference triangle vectors)
+
+        self.precompute()
+
+        # dynamic fields
+        self.displacement = ti.Vector.field(2, ti.f32, shape=self.n, needs_grad=True) # displacement from original positions
+        self.velocities = ti.Vector.field(2, ti.f32, shape=self.n) # time derivative of displacement
+        self.positions = ti.Vector.field(2, ti.f32, shape=self.n) # original positions + displacement (real position)
+        self.E = ti.field(ti.f32, shape=(), needs_grad=True) # total energy of the system, is autodifferentiated to compute forces
+        
+        # user can supply initial velocities
+        self.velocities.from_numpy(ps)
+
    
     @ti.kernel
-    def init(self):
+    def precompute(self):
         for tri in range(self.tris):
+            # obtain triangle corners
             x1 = self.vertices[self.indices[3 * tri]]
             x2 = self.vertices[self.indices[3 * tri + 1]]
             x3 = self.vertices[self.indices[3 * tri + 2]]
-
+            
+            # compute any two edge vectors
             e1 = x2-x1
             e2 = x3-x1
+            
+            # compute mapping (reference triangle vector -> world vector)
             A = ti.Matrix([[e1[0], e2[0]], [e1[1], e2[1]]])
+
+            # invert it
             self.A[tri] = A.inverse()
+
+            # compute area from cross product of edges
             self.V[tri] = (e1[0] * e2[1] - e1[1] * e2[0]) / 2
 
        
     @ti.kernel
-    def calculate_mesh_energy(self): 
+    def calculate_energy(self): 
         for tri in range(self.tris):
+
+            # retrieve the corners of the current element / triangle
             x1 = self.vertices[self.indices[3 * tri]] + self.displacement[self.indices[3 * tri]]
             x2 = self.vertices[self.indices[3 * tri + 1]] + self.displacement[self.indices[3 * tri + 1]]
             x3 = self.vertices[self.indices[3 * tri + 2]] + self.displacement[self.indices[3 * tri + 2]]
-
+            
+            #calculate the same two edges of the triangle as for the matrix A above
             e1 = x2-x1
             e2 = x3-x1
-
+            
+            # Matrix B mapping reference triangle to deformed triangle
             B = ti.Matrix([[e1[0], e2[0]], [e1[1], e2[1]]])
+
+            # The deformation gradient matrix F is defined as the matrix product of B and A^-1, 
+            # with A^-1 being the matrix mapping the current undeformed triangle to the reference triangle
+            # A can be precomputed
             F = B @ self.A[tri] 
             
-            #E = 0.5 * (F.transpose() @ F - ti.Matrix.identity(ti.f32, 2)) #Green Strain not energy
-            #self.E[None] += 0.1*((F.determinant() - 1)**2 + (E@E).trace()) * self.V[tri] 
 
-            mu = 0.05
-            lam = 0.01
+            #Lamé coefficients
+            mu = 0.05 # shear viscosity mu
+            lam = 0.01 # 1st lamé parameter lambda (no physical intuition)
 
-            self.E_m[None] += 0.5 * mu * ((F.transpose() @ F).trace() - 3) - mu * ti.log(F.determinant()) + lam * ti.log(F.determinant())**2 + 0.01 * (x1[1]+x2[1]+x3[1])
+            # Calculate energy contribution from neo-hookean energy density
+            self.E[None] += 0.5 * mu * ((F.transpose() @ F).trace() - 3) - mu * ti.log(F.determinant()) + lam * ti.log(F.determinant())**2
+
+            # and from gravity (floor forces are accounted for later)
+            self.E[None] += 0.01 * (x1[1]+x2[1]+x3[1])
 
 
-    @ti.kernel
-    def calculate_energy(self):
-        self.E[None] = self.E_m[None]
-    
     @ti.kernel
     def step(self):
-        for i in self.vertices: 
+        for i in self.vertices:
+            # update velocities according to potential gradient and damp it slightly
             self.velocities[i] -= (self.displacement.grad[i] + 0.2 * self.velocities[i]) * self.dt
-            self.displacement[i] += self.velocities[i] * self.dt
 
+            # update displacements according to velocities
+            self.displacement[i] += self.velocities[i] * self.dt
+            
+            # floor force
             if self.positions[i][1] < 0.0:
                 self.velocities[i] += ti.Matrix([0.0,1.0]) * self.dt
-
+            
+            # compute real position for rendering
             self.positions[i] = self.vertices[i] + self.displacement[i] 
 
 if __name__ == "__main__":
@@ -159,12 +184,7 @@ if __name__ == "__main__":
         
     i = 0
     while window.running:
-        sim.E[None] = 0
-        sim.E_m[None] = 0
-        sim.E_c[None] = 0
-
         with ti.Tape(sim.E):
-            sim.calculate_mesh_energy()
             sim.calculate_energy()
         sim.step()
 
