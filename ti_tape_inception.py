@@ -18,15 +18,16 @@ loss_2 = ti.field(dtype=ti.f32, shape=(), needs_grad=True)
 target = 5
 
 learning_rate = 1e-3
-learning_rate_2 = 1e-3
+learning_rate_2 = 1e-2
 
 
 def init():
     for i in range(x_size):
-        x[i] = random.random()
-    x_2[None] = random.random()
+        x[i] = (random.random() - 0.5) * 10
+    x_2[None] = (random.random() - 0.5) * 10
     loss[None] = 1
     loss_2[None] = 1
+
 
 def clear_output():
     output[None] = 0
@@ -63,7 +64,7 @@ def do_iter_2():
 
 
 def update_var_2():
-    x_2[None] -= learning_rate_2 * x_2.grad[None]
+    x_2[None] -= learning_rate_2 * x_2.grad[None] 
 
 
 def main_loop_2():
@@ -87,38 +88,37 @@ def update_var():
         x[i] -= learning_rate * x.grad[i]
 
 
-num_iter = 0
-iter = []
-t = []
-o_1 = []
-o_2 = []
+NUM_ITER = 0
+ITERATIONS = []
+T = []
+O_1 = []
+O_2 = []
 
 init()
-while (loss[None] > 0.01) or (loss_2[None] > 0.01):
+while (loss[None] > 0.01) or (min(loss_2[None], 0.99) > 0.01):
     clear_output()
-    l = loss[None]
+    l_v = loss[None]
     with ti.Tape(loss):
-        do_iter(l)
+        do_iter(l_v)
     if loss[None] > 0.01: update_var()
 
+    ITERATIONS.append(NUM_ITER)
+    T.append(target)
+    O_1.append(output[None])
+    O_2.append(output_2[None])
 
-    iter.append(num_iter)
-    t.append(target)
-    o_1.append(output[None])
-    o_2.append(output_2[None])
-
-    num_iter += 1
-    print("Values of first NN is", x[0] + x[1] + x[2] + x[3], \
-      "\nValues of second NN are", x_2[None], "and target is", target, \
+    NUM_ITER += 1
+    print(#"Values of first NN is", x[0] + x[1] + x[2] + x[3], \
+      #"\nValues of second NN are", x_2[None], "and target is", target, \
       "\nLosses are", loss[None], "and", loss_2[None])
 
 
 print("Final Values are", x[0], x[1], x[2], x[3], "and sum of", x[0] + x[1] + x[2] + x[3], \
       "Final Values of second NN are", x_2[None], "and target is", target)
 
-plt.plot(iter, t, label="target")
-plt.plot(iter, o_1, color="r", label="output outer network")
-plt.plot(iter, o_2, color="g", label="output inner network")
+plt.plot(ITERATIONS, T, label="target")
+plt.plot(ITERATIONS, O_1, color="r", label="output outer network")
+plt.plot(ITERATIONS, O_2, color="g", label="output inner network")
 
 plt.legend()
 plt.show()
