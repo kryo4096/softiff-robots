@@ -1,6 +1,9 @@
+import time
+import math
+import colorsys
+
 import taichi as ti
 import numpy as np
-import time
 
 
 class Mesh:
@@ -59,6 +62,7 @@ class Mesh:
                 v_x = s_x + i * size
                 v_y = s_y + j * size
 
+
                 mesh.add_vertex((v_x, v_y), (rot_vel*(v_y-center_y), rot_vel*(center_x-v_x)), (i/w, j/h, 0))
 
                 if i < w - 1 and j < h - 1:
@@ -67,10 +71,29 @@ class Mesh:
 
         return mesh
 
+    def disk(center, n, r):
+        mesh = Mesh()
+
+        mesh.add_vertex(center)
+
+        for i in range(n):
+            angle = 2 * math.pi * i / n
+                
+            col = colorsys.hls_to_rgb(i/n, 0.5, 1)
+
+            mesh.add_vertex((center[0] + math.cos(angle) * r, center[1] + math.sin(angle) * r), c=col) 
+            mesh.add_triangle(0, i+1, 1 + (i+1)%n)
+
+        return mesh
+
+            
+
 @ti.data_oriented
 class SoftbodySim:
-    def __init__(self,mesh, dt=0.1):
+    def __init__(self,mesh, dt=0.1, damping=0.1, g = 0.098):
         self.dt = dt # time step
+        self.damping = damping #damping coefficient
+        self.g = g # gravity
         
         # constant fields (given by user)
         self.n = len(mesh.vertices) #number of vertices in the softbody
@@ -97,6 +120,7 @@ class SoftbodySim:
         self.velocities = ti.Vector.field(2, ti.f32, shape=self.n) # time derivative of displacement
         self.positions = ti.Vector.field(2, ti.f32, shape=self.n) # original positions + displacement (real position)
         self.E = ti.field(ti.f32, shape=(), needs_grad=True) # total energy of the system, is autodifferentiated to compute forces
+        self.t =ti.field(ti.f32, shape=())
         
         # user can supply initial velocities
         self.velocities.from_numpy(ps)
@@ -121,7 +145,7 @@ class SoftbodySim:
             self.A[tri] = A.inverse()
 
             # compute area from cross product of edges
-            self.V[tri] = (e1[0] * e2[1] - e1[1] * e2[0]) / 2
+            self.V[tri] = ti.abs(A.determinant()) / 2
 
        
     @ti.kernel
@@ -145,23 +169,25 @@ class SoftbodySim:
             # A can be precomputed
             F = B @ self.A[tri] 
             
-
             #Lamé coefficients
-            mu = 0.05 # shear viscosity mu
-            lam = 0.01 # 1st lamé parameter lambda (no physical intuition)
+            mu = 100 # shear viscosity mu
+            lam = 100 # 1st lamé parameter lambda (no physical intuition)
 
             # Calculate energy contribution from neo-hookean energy density
-            self.E[None] += 0.5 * mu * ((F.transpose() @ F).trace() - 3) - mu * ti.log(F.determinant()) + lam * ti.log(F.determinant())**2
+            self.E[None] += (0.5 * mu * ((F.transpose() @ F).trace() - 3) - mu * ti.log(F.determinant()) + lam * ti.log(F.determinant())**2) * self.V[tri]
+            
+            midpoint = (x1 + x2 + x3) / 3
+
 
             # and from gravity (floor forces are accounted for later)
-            self.E[None] += 0.01 * (x1[1]+x2[1]+x3[1])
+            self.E[None] += self.g * midpoint[1] * self.V[tri] 
 
 
     @ti.kernel
     def step(self):
         for i in self.vertices:
             # update velocities according to potential gradient and damp it slightly
-            self.velocities[i] -= (self.displacement.grad[i] + 0.2 * self.velocities[i]) * self.dt
+            self.velocities[i] -= (self.displacement.grad[i] + self.damping * self.velocities[i]) * self.dt
 
             # update displacements according to velocities
             self.displacement[i] += self.velocities[i] * self.dt
@@ -173,11 +199,14 @@ class SoftbodySim:
             # compute real position for rendering
             self.positions[i] = self.vertices[i] + self.displacement[i] 
 
+            self.t[None] += self.dt
+
 if __name__ == "__main__":
     ti.init(arch=ti.cuda) 
-    mesh = Mesh.plane((0.5,2.0),3,100,0.02)
+    #mesh = Mesh.plane((0.5,0.5),6,20,0.01)
 
-    sim = SoftbodySim(mesh, dt = 0.005)
+    mesh = Mesh.disk((0.5,1.0), 200, 0.4)
+    sim = SoftbodySim(mesh, dt = 0.001, damping=0.5, g=90)
 
     window = ti.ui.Window("float",res = (1000 , 1000))
     canvas = window.get_canvas()
