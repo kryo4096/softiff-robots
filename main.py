@@ -66,7 +66,7 @@ class Mesh:
                 mesh.add_vertex((v_x, v_y), (rot_vel*(v_y-center_y), rot_vel*(center_x-v_x)), (i/w, j/h, 0))
 
                 if i < w - 1 and j < h - 1:
-                    mesh.add_triangle((i + 1) * h + j, i * h + j, i * h + j + 1)
+                   # mesh.add_triangle((i + 1) * h + j, i * h + j, i * h + j + 1)
                     mesh.add_triangle((i + 1) * h + j, i * h + j + 1, (i+1)*h + j + 1)
 
         return mesh
@@ -179,8 +179,12 @@ class SoftbodySim:
             midpoint = (x1 + x2 + x3) / 3
 
 
-            # and from gravity (floor forces are accounted for later)
+            # and from gravity
             self.E[None] += self.g * midpoint[1] * self.V[tri] 
+
+            # floor forces
+            if midpoint[1] < 0:
+                self.E[None] -= 1 * midpoint[1]
 
 
     @ti.kernel
@@ -192,10 +196,6 @@ class SoftbodySim:
             # update displacements according to velocities
             self.displacement[i] += self.velocities[i] * self.dt
             
-            # floor force
-            if self.positions[i][1] < 0.0:
-                self.velocities[i] += ti.Matrix([0.0,1.0]) * self.dt
-            
             # compute real position for rendering
             self.positions[i] = self.vertices[i] + self.displacement[i] 
 
@@ -203,10 +203,10 @@ class SoftbodySim:
 
 if __name__ == "__main__":
     ti.init(arch=ti.cuda) 
-    #mesh = Mesh.plane((0.5,0.5),6,20,0.01)
+    #mesh = Mesh.plane((0.5,0.5),6,20,0.05)
 
     mesh = Mesh.disk((0.5,1.0), 200, 0.4)
-    sim = SoftbodySim(mesh, dt = 0.001, damping=0.5, g=90)
+    sim = SoftbodySim(mesh, dt = 0.005, damping=0.1, g=90)
 
     window = ti.ui.Window("float",res = (1000 , 1000))
     canvas = window.get_canvas()
