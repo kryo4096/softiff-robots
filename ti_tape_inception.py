@@ -43,9 +43,9 @@ def get_output():
         output[None] += x[i]
 
 
-@ti.kernel
+@ti.func
 def get_output_2():
-    output_2[None] = x_2[None]
+    output_2[None] += x_2[None]
 
 
 @ti.kernel
@@ -53,7 +53,7 @@ def calculate_loss():
     loss[None] = ti.abs(output[None] - output_2[None])
 
 
-@ti.kernel
+@ti.func
 def calculate_loss_2():
     loss_2[None] = ti.abs(output_2[None] - target)
 
@@ -64,19 +64,23 @@ def do_iter_2():
 
 
 def update_var_2():
-    x_2[None] -= learning_rate_2 * x_2.grad[None] 
+    x_2[None] -= learning_rate_2 * x_2.grad[None]
 
 
 def main_loop_2():
     clear_output_2()
+    '''
     with ti.Tape(loss_2):
         do_iter_2()
+    '''
+    do_iter_2()
+    do_iter_2.grad()
     if loss_2[None] > 0.01: update_var_2()
 
-
-def do_iter(loss_value):
+@ti.kernel
+def do_iter(loss_value: ti.f32):
     rand = random.random()
-    if loss_2[None] > 0.01 and rand > loss_value:
+    if loss_2[None] > 0.01:# and rand > loss_value:
         main_loop_2()
 
     get_output()
