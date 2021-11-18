@@ -1,15 +1,21 @@
+import random
+import time
+
 import taichi as ti
 import numpy as np
 
-import random
-import time
+
 
 ti.init(arch=ti.gpu)
 
 energy = ti.field(dtype=ti.f32, shape=(), needs_grad=True)
 
+gui = ti.GUI("Robot Simulation")
 
-@ti.pyfunc
+SHOULD_DRAW = False
+
+
+@ti.func
 def relu(value):
     return max(0, value)
 
@@ -20,28 +26,31 @@ def reset_energy():
 
 
 @ti.kernel
-def calculate_loss(x: ti.f32, y: ti.f32, v_x: ti.f32, v_y: ti.f32):
-    energy[None] += 10*relu(v_x - 1)
-    energy[None] += 10*relu(v_y - 1)
-    energy[None] -= x
+def calculate_initial_loss(v_x_init: ti.f32, v_y_init: ti.f32):
+    energy[None] += 10 * relu(v_x_init - 1)
+    energy[None] += 10 * relu(v_y_init - 1)
 
 
-def rdm(start, end):
-    return random.random() * (end - start) + start
+@ti.kernel
+def calculate_loss(x_final: ti.f32):
+    energy[None] -= x_final
 
 
+@ti.data_oriented
 class Optimizer:
     def __init__(self):
-        self.learning_rate = 1e-2
+        self.learning_rate = 1e-3
+        self.t = 0
 
     def get_learning_rate(self):
-        return self.learning_rate
+        self.t += 1
+        return self.learning_rate + pow(2, -self.t / 10)
+
 
 @ti.data_oriented
 class NeuralNetwork:
     def __init__(self, input_size, hidden_layer_size, output_size):
         self.input_size = input_size
-        self.input_optimizer = Optimizer()
 
         self.hidden_layer_size = hidden_layer_size
         self.hidden_weight = ti.Matrix.field(n=hidden_layer_size, m=input_size, dtype=ti.f32, shape=(), needs_grad=True)
@@ -75,13 +84,16 @@ class NeuralNetwork:
 
     @ti.kernel
     def update_values(self):
-        self.hidden_weight[None] -= self.hidden_optimizer.get_learning_rate() * self.hidden_weight[None]
-        self.hidden_bias[None] -= self.hidden_optimizer.get_learning_rate() * self.hidden_bias[None]
+        print("Norms of vectors are", self.hidden_weight.grad[None].norm(), self.hidden_bias.grad[None].norm(), self.output_weight.grad[None].norm(), self.output_bias.grad[None].norm())
 
-        self.output_weight[None] -= self.output_optimizer.get_learning_rate() * self.output_weight[None]
-        self.output_bias[None] -= self.output_optimizer.get_learning_rate() * self.output_bias[None]
+        self.hidden_weight[None] -= self.hidden_optimizer.get_learning_rate() * self.hidden_weight.grad[None]
+        self.hidden_bias[None] -= self.hidden_optimizer.get_learning_rate() * self.hidden_bias.grad[None]
+
+        self.output_weight[None] -= self.output_optimizer.get_learning_rate() * self.output_weight.grad[None]
+        self.output_bias[None] -= self.output_optimizer.get_learning_rate() * self.output_bias.grad[None]
 
 
+'''
 class Robot:
     def __init__(self):
         pass
@@ -108,15 +120,16 @@ class RobotController:
 
     def update_gradients(self):
         self.nn.update_values()
+'''
 
 
 @ti.data_oriented
 class Simulation():
     def __init__(self, x, y, v_x, v_y):
-        self.x = ti.field(dtype=ti.f32, shape=())
-        self.y = ti.field(dtype=ti.f32, shape=())
-        self.v_x = ti.field(dtype=ti.f32, shape=())
-        self.v_y = ti.field(dtype=ti.f32, shape=())
+        self.x = ti.field(dtype=ti.f32, shape=(), needs_grad=True)
+        self.y = ti.field(dtype=ti.f32, shape=(), needs_grad=True)
+        self.v_x = ti.field(dtype=ti.f32, shape=(), needs_grad=True)
+        self.v_y = ti.field(dtype=ti.f32, shape=(), needs_grad=True)
 
         self.x_init = x
         self.y_init = y
@@ -127,8 +140,7 @@ class Simulation():
         self.mass = 1
         self.g = -9.81
         self.dt = 1e-3
-        self.final_distance = 0
-        self.gui = ti.GUI("Simulation_Visualization")
+        #self.gui = ti.GUI("Simulation_Visualization")
 
         self.init(x, y, v_x, v_y)
 
@@ -138,60 +150,47 @@ class Simulation():
         self.v_x[None] = v_x
         self.v_y[None] = v_y
 
-
+    @ti.kernel
+    def explicit_euler(self):
+        v_pre = self.v_y[None]
+        self.v_y[None] += (self.ground_spring_constant * relu(-self.y[None]) + self.mass * self.g) * self.dt
+        self.y[None] += v_pre * self.dt
+        self.x[None] += self.v_x[None] * self.dt
 
     @ti.kernel
     def symplectic_euler(self):
-        self.v_y[None] += (self.ground_spring_constant * relu(-self.y[None]) + self.mass * self.g)*self.dt
+        self.v_y[None] += (self.ground_spring_constant * relu(-self.y[None]) + self.mass * self.g) * self.dt
         self.y[None] += self.v_y[None] * self.dt
         self.x[None] += self.v_x[None] * self.dt
 
 
-
+nn = NeuralNetwork(2, 10, 2)
 
 def main():
 
-    '''
-    robot = Robot()
-    controller = RobotController(robot)
-    '''
-
-    gui = ti.GUI("Robot Simulation")
-
-    nn = NeuralNetwork(2, 10, 2)
-
-
-
     while gui.running:
-        reset_energy()
-        with ti.Tape(energy):
-            x, y = 0.1, 0.1
+
+        x, y = 0.1, 0.1
+
+        with ti.Tape(loss=energy):
+
             nn.compute_output(x, y)
             sim = Simulation(x, y, nn.output[None][0], nn.output[None][1])
-
+            calculate_initial_loss(sim.v_x[None], sim.v_y[None])
             for i in range(800):
-                sim.symplectic_euler()
 
-                '''
-                if i % 10 == 0:
+                sim.explicit_euler()  # sim.symplectic_euler()
+
+                if SHOULD_DRAW and i % 10 == 0:
                     time.sleep(0.033)
                     gui.circle(pos=(sim.x[None], sim.y[None]), radius=10)
                     gui.show()
-                '''
 
-            calculate_loss(sim.x[None], sim.y[None], sim.v_x[None], sim.v_y[None])
-            print(f"Completed iteration with values x:{sim.x_init}, y:{sim.y_init}, v_x: {sim.v_x_init}, v_y: {sim.v_y_init} with final loss {energy[None]}")
+            calculate_loss(sim.x[None])
+            print(f"Completed iteration with values x:{sim.x[None]}, v_x_init: {sim.v_x_init}, v_y_init: {sim.v_y_init} with final loss {energy[None]}")
+
         nn.update_values()
-
-        '''
-        for i in range(100):
-            controller.do_control()
-        controller.update_gradients()
-        
-        robot.draw(gui)
-        '''
 
 
 if __name__ == "__main__":
     main()
-

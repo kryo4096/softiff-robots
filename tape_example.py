@@ -41,7 +41,7 @@ def do_iter():
     get_output()
     calculate_loss()
 
-
+@ti.kernel
 def update_var():
     for i in range(x_size):
         x[i] -= learning_rate * x.grad[i]
