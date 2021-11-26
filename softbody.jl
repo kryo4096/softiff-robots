@@ -13,7 +13,7 @@ mutable struct Simulation{S <: AbstractFloat,I <: Integer}
     V::Vector{S}
     M::Vector{S}
 
-    ind::Vector{SVector{3, I}}
+    ind::Vector{SVector{3,I}}
     A_inv::Vector{SMatrix{2,2,S,4}}
     vol::Vector{S}
     lambda::Vector{S}
@@ -22,10 +22,10 @@ end
 
 
 index_arr(ind) = SA[2 * ind[1] - 1, 2 * ind[1], 2 * ind[2] - 1, 2 * ind[2], 2 * ind[3] - 1, 2 * ind[3]]
-edge_mat(x) = SA[x[3]-x[1] x[5]-x[1]; x[4]-x[2] x[6]-x[2]]
+edge_mat(x) = SA[x[3] - x[1] x[5] - x[1]; x[4] - x[2] x[6] - x[2]]
 
 function compute_gradient_parallel!(grad, sim::Simulation, D_1, a=0.01)
-    N_p = size(sim.X)[1]÷2
+    N_p = size(sim.X)[1] ÷ 2
     N_t = size(sim.ind)[1]
 
     lk = ReentrantLock()
@@ -62,7 +62,7 @@ function compute_gradient_parallel!(grad, sim::Simulation, D_1, a=0.01)
 
     Threads.@threads for vi = 1:N_p
 
-        inds = SA[2*vi - 1, 2 * vi]
+        inds = SA[2 * vi - 1, 2 * vi]
 
         x_0 = sim.X[inds]
         v_0 = sim.V[inds]
@@ -80,12 +80,12 @@ function compute_gradient_parallel!(grad, sim::Simulation, D_1, a=0.01)
 
             v = (d .- d_0) / sim.dt
 
-            fh = 0.1
+            fh = 0.0
 
             if p[2] > fh
                 E += sim.g * p[2] * m
             else
-                E += 100000 * (fh- p[2])^2 + v[1]^2 * (fh - p[2]) * 100
+                E += 100000 * (fh - p[2])^2 + v[1]^2 * (fh - p[2]) * 1000
             end
 
             return I + sim.dt^2 * E
@@ -115,10 +115,9 @@ function init_simulation(; g=9.8, dt=0.01, center=[0.5, 0.5], radius=0.5, mu=100
     X[[1,2]] = center
 
     for i = 1:n
-        vi = [2*(i+1) - 1, 2*(i+1)]
+        vi = [2 * (i + 1) - 1, 2 * (i + 1)]
         angle = i / n * 2π
         X[vi] .= radius * [cos(angle), sin(angle)] + center
-        V[vi] .= 5 * [-sin(angle), cos(angle)] + [0,1]
         ind[i] = SA[1, 1 + i, 1 + mod1(i + 1, n)]
     end
 
@@ -126,18 +125,19 @@ function init_simulation(; g=9.8, dt=0.01, center=[0.5, 0.5], radius=0.5, mu=100
     mu = ones(n_triangles) * mu
     A = map(ti -> edge_mat(X[index_arr(ind[ti])]), 1:n_triangles)
     A_inv = inv.(A)
-
     vol = abs.(0.5 * det.(A))
 
-    return Simulation(g, dt, X, D, V, M, ind, A_inv, vol, lambda, mu)
+return Simulation(g, dt, X, D, V, M, ind, A_inv, vol, lambda, mu)
 end
+
+
 
 struct Pass
     alpha
     iter
     guess
     tol
-end
+    end
 
 function line_search(gradient, passes::Vector{Pass})
         converged = false
@@ -154,12 +154,13 @@ function line_search(gradient, passes::Vector{Pass})
 
             for k = 1:pass.iter
                 grad .= 0.0
+
                 gradient(grad, x)
 
                 x .= x .- grad .* pass.alpha
 
                 if norm(grad) < pass.tol
-                    println("converged after $k iterations in $(i)th pass, |∇E| = $(norm(grad))")
+                    # println("converged after $k iterations in $(i)th pass, |∇E| = $(norm(grad))")
                     converged = true
                     break
                 end
@@ -175,9 +176,9 @@ function line_search(gradient, passes::Vector{Pass})
 end
 
 function main()
-    sim = init_simulation(; center=[0.5, 0.5], dt=0.001, lam=20000.0, mu=10000.0, g=10.0, n=10, radius=0.3)
+    sim = init_simulation(; center=[0.5, 0.5], dt=0.001, lam=20000.0, mu=10000.0, g=10.0, n=4, radius=0.3)
 
-    render_pos = Node(reshape(sim.X + sim.D, 2, size(sim.X)[1]÷2))
+    render_pos = Node(reshape(sim.X + sim.D, 2, size(sim.X)[1] ÷ 2))
 
     f = Figure(resolution=(500, 500))
     mu_slider = Slider(f[2, 1], range=500:10:10000, startvalue=3000)
@@ -186,19 +187,25 @@ function main()
     mesh!(f[1, 1], render_pos, Vector(vcat(sim.ind...)))
     display(f)
 
+    a = time_ns()
+
     for i = 1:1000000
        
-        D = line_search((grad, D_1) -> compute_gradient_parallel!(grad, sim, D_1), [Pass(1.0, 10, sim.D + sim.V * sim.dt, 1e-3), Pass(0.2, 100, sim.D, 1e-3)])
+        D = line_search((grad, D_1) -> compute_gradient_parallel!(grad, sim, D_1), [Pass(1.0, 10, sim.D + sim.V * sim.dt, 1e-4), Pass(0.2, 1000, sim.D, 1e-4)])
         sim.V .= (D .- sim.D) ./ sim.dt
         sim.D .= D
 
-        if i % 1 == 0
+        if i % 1000 == 0
+            println(1000 / ((time_ns() - a) / 1e9) * sim.dt)
+            a = time_ns()
+        end
+
+        if i % 30 == 0
             sim.lambda .= mu_slider.value[]
             sim.mu .= mu_slider.value[]
-            render_pos[] = reshape(sim.X + sim.D, 2, size(sim.X)[1]÷2)
-            sleep(0.001)
+            render_pos[] = reshape(sim.X + sim.D, 2, size(sim.X)[1] ÷ 2)
+
+            sleep(0.01)
         end
     end
 end
-
-main()

@@ -1,3 +1,0 @@
-using GLMakie
-
-2
