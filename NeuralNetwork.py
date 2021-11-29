@@ -10,7 +10,7 @@ ti.init(arch=ti.gpu)
 
 energy = ti.field(dtype=ti.f32, shape=(), needs_grad=True)
 
-gui = ti.GUI("Robot Simulation")
+gui = ti.GUI("Ball Throwing  Simulation")
 
 SHOULD_DRAW = True
 
@@ -41,12 +41,12 @@ def calculate_loss(true_x: ti.f32, true_y: ti.f32, x_final: ti.template(), y_fin
 @ti.data_oriented
 class Optimizer:
     def __init__(self):
-        self.learning_rate = 1e-2
+        self.learning_rate = 1e-3
         self.t = 0
 
     def get_learning_rate(self):
         self.t += 1
-        return self.learning_rate * (1 + pow(10, 1-self.t/100))
+        return self.learning_rate * (1 + pow(100, 1-self.t/100))
 
 
 @ti.data_oriented
@@ -90,8 +90,8 @@ class NeuralNetwork:
 
     @ti.kernel
     def compute_output(self, x: ti.f32, y: ti.f32):
-        input = ti.Vector([x, y])
-        hidden_layer1 = self.hidden_weight1[None] @ input + self.hidden_bias1[None]
+        input_vector = ti.Vector([x, y])
+        hidden_layer1 = self.hidden_weight1[None] @ input_vector + self.hidden_bias1[None]
         hidden_layer2 = self.hidden_weight2[None] @ hidden_layer1 + self.hidden_bias2[None]
         self.output[None] = self.output_weight[None] @ hidden_layer2 + self.output_bias[None]
 
@@ -168,7 +168,11 @@ class Simulation():
         self.y[None] += self.v_y[None] * self.dt
         self.x[None] += self.v_x[None] * self.dt
 
-
+def generate_data(current_iter, max_iter):
+    if current_iter < max_iter:
+        return random.random(), random.random()
+    else:
+        return random.random(), random.random()
 
 def main():
     iter_count = 0
@@ -176,9 +180,11 @@ def main():
     sim = Simulation()
     nn = NeuralNetwork(2, 10, 10, 2)
 
+    training_iterations = 10000
+
     while gui.running:
+        x, y = generate_data(iter_count, training_iterations)
         with ti.Tape(loss=energy):
-            x, y = random.random(), random.random()
             nn.compute_output(x, y)
             sim.init(0.1, 0.1, nn.output, nn.output)
             calculate_initial_loss(sim.v_x_init, sim.v_y_init)
@@ -186,18 +192,17 @@ def main():
 
                 sim.symplectic_euler()
 
-                if iter_count % 10 is 0 and SHOULD_DRAW and i % 30 == 0:
+                if SHOULD_DRAW and i % 30 == 0 and iter_count % 10 == 0: #iter_count > training_iterations and
                     time.sleep(0.033)
                     gui.circle(pos=(x, y), radius=10, color=0xFF0000)
                     gui.circle(pos=(sim.x[None], sim.y[None]), radius=10)
                     gui.show()
 
-
             calculate_loss(x, y, sim.x, sim.y)
 
             print(f"Completed iteration {iter_count} with values x:{sim.x[None]}, v_x_init: {sim.v_x_init[None]}, v_y_init: {sim.v_y_init[None]} with final loss {energy[None]}")
 
-        if iter_count < 300:
+        if iter_count < training_iterations:
             nn.update_values()
         iter_count += 1
 
