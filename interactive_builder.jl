@@ -1,8 +1,8 @@
 using GLMakie
+using GLMakie.GLFW
 using StaticArrays
 
 include("softbody.jl")
-
 
 function main()
     v = Node(zeros(0, 0))
@@ -11,11 +11,14 @@ function main()
     render_ind = Node([1,2,3])
 
     f = Figure(resolution=(640, 640))
+
+    
+
     ax = Axis(f[1, 1], aspect=1, limits=(-0.1, 1.1, -0.1, 1.1))
 
     deactivate_interaction!(ax, :rectanglezoom)
 
-    display(f)
+    glfw_window = GLMakie.to_native(display(f))
 
     running = Node(false)
     
@@ -24,6 +27,10 @@ function main()
             if event.action == Keyboard.press
                 running[] = true
             end
+        end
+
+        if event.key == Keyboard.q
+            running[] = false
         end
     end
 
@@ -66,13 +73,13 @@ function main()
 
     X = Float64.(reshape(v[], 2n_vertices))
 
-    lambda = ones(n_triangles) * 4000
-    mu = ones(n_triangles) * 4000
+    lambda = ones(n_triangles) * 2000
+    mu = ones(n_triangles) * 1000
     A = map(ti -> edge_mat(X[index_arr(ind[ti])]), 1:n_triangles)
     A_inv = Vector(inv.(A))
     vol = abs.(0.5 * det.(A))
 
-    sim = Simulation(10.0, 0.001, X, zeros(2n_vertices), zeros(2n_vertices), ones(n_vertices), ind, A_inv, vol, lambda, mu)
+    sim = Simulation(10.0, 1000., 0.0, 1000.,  0.001, X, zeros(2n_vertices), zeros(2n_vertices), ones(n_vertices), ind, A_inv, vol, lambda, mu)
 
     clicked_vertex = Node(-1)
 
@@ -83,7 +90,7 @@ function main()
                 for i in 1:n_vertices
                     ind = SA[2i - 1, 2i]
 
-                    if norm(sim.X[ind] + sim.D[ind] - pos) < 0.01
+                    if norm(sim.X[ind] + sim.D[ind] - pos) < 0.05
                         clicked_vertex[] = i
                     end
                 end
@@ -91,11 +98,7 @@ function main()
 
             i = clicked_vertex[]
             if i != -1
-                ind = SA[2i - 1, 2i]
-
-                sim.D[ind] = pos - sim.X[ind]
                 if event.action == Mouse.release
-
                     clicked_vertex[] = -1
                 end
             end
@@ -105,11 +108,17 @@ function main()
         return Consume()
     end
 
+    hess = spzeros(size(sim.X)[1], size(sim.X)[1])
+    init_hessian!(hess, sim, 1.0)
+
     i = 0
     while running[]
-        
-        D = line_search((grad, D_1) -> compute_gradient_parallel!(grad, sim, D_1), [Pass(1.0, 10, sim.D + sim.V * sim.dt, 1e-3), Pass(0.2, 1000, sim.D, 1e-3)])
-        
+        hess_f(hess, D_1) = compute_hessian!(hess, sim, D_1)
+        grad_f(grad, D_1) = compute_gradient!(grad, sim, D_1)
+
+        # D = line_search(grad_f, [Pass(1.0, 10, sim.D + sim.V * sim.dt, 1e-3), Pass(0.1, 1000, sim.D, 1e-3)])
+        D = newton!(hess, hess_f, grad_f, sim.D + sim.V * sim.dt, 1e-5)
+
         if clicked_vertex[] != -1
             pos = SVector{2}(mouseposition(ax.scene))
             ind = SA[2clicked_vertex[] - 1, 2clicked_vertex[]]
@@ -119,12 +128,13 @@ function main()
         sim.V .= (D .- sim.D) ./ sim.dt
         sim.D .= D
 
-        if i % 5 == 0
+        if i % 1 == 0
             v[] = reshape(sim.X + sim.D, 2, size(sim.X)[1] ÷ 2)
-
-            sleep(0.01)
         end
 
+        sleep(0.0001)
         i += 1
     end
+
+    GLFW.SetWindowShouldClose(glfw_window, true)
 end
