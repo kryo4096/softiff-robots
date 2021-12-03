@@ -12,7 +12,6 @@ function main()
 
     f = Figure(resolution=(640, 640))
 
-    
 
     ax = Axis(f[1, 1], aspect=1, limits=(-0.1, 1.1, -0.1, 1.1))
 
@@ -42,20 +41,36 @@ function main()
 
                     pos = Vector(mouseposition(ax.scene))
 
-                    if n > 3
-                        push!(ind, SA[n, n - 1, n - 2])
-                        render_ind.val = Vector(vcat(ind...))
+                    new_vertex = true
+
+                    for i in 1:size(v[])[2]
+                        if norm(v[][:,i] - pos) < 0.03
+                            ni = SA[i, ind[size(ind)[1]][1], ind[size(ind)[1]][2]]
+
+                            push!(ind, ni)
+                            render_ind[] = Vector(vcat(ind...))
+                            new_vertex = false
+                        end
                     end
 
-                    if n == 1
-                        v = Node(reshape(pos, 2, 1))
-                        scatter!(f[1,1], v)
-                    else
-                        v[] = [v[] pos]
-                    end
+                    if new_vertex
 
-                    if n == 3
-                        mesh!(f[1,1], v, render_ind)
+                        if n > 3
+                            push!(ind, SA[n, n - 1, n - 2])
+                            render_ind.val = Vector(vcat(ind...))
+                        end
+
+                        if n == 1
+                            v = Node(reshape(pos, 2, 1))
+                            scatter!(f[1,1], v)
+                        else
+                            v[] = [v[] pos]
+                        end
+
+                        if n == 3
+                            mesh!(f[1,1], v, render_ind)
+                        end
+
                     end
                 end
             end
@@ -73,13 +88,13 @@ function main()
 
     X = Float64.(reshape(v[], 2n_vertices))
 
-    lambda = ones(n_triangles) * 2000
-    mu = ones(n_triangles) * 1000
+    lambda = ones(n_triangles) * 1e5
+    mu = ones(n_triangles) * 1e5
     A = map(ti -> edge_mat(X[index_arr(ind[ti])]), 1:n_triangles)
     A_inv = Vector(inv.(A))
     vol = abs.(0.5 * det.(A))
 
-    sim = Simulation(10.0, 1000., 0.0, 1000.,  0.001, X, zeros(2n_vertices), zeros(2n_vertices), ones(n_vertices), ind, A_inv, vol, lambda, mu)
+    sim = Simulation(10.0, 1e5, 0.0, 100.,  0.001, X, zeros(2n_vertices), zeros(2n_vertices), ones(n_vertices), ind, A_inv, vol, lambda, mu)
 
     clicked_vertex = Node(-1)
 
@@ -90,7 +105,7 @@ function main()
                 for i in 1:n_vertices
                     ind = SA[2i - 1, 2i]
 
-                    if norm(sim.X[ind] + sim.D[ind] - pos) < 0.05
+                    if norm(sim.X[ind] + sim.D[ind] - pos) < 0.03
                         clicked_vertex[] = i
                     end
                 end
@@ -111,6 +126,8 @@ function main()
     hess = spzeros(size(sim.X)[1], size(sim.X)[1])
     init_hessian!(hess, sim, 1.0)
 
+    display(hess)
+
     i = 0
     while running[]
         hess_f(hess, D_1) = compute_hessian!(hess, sim, D_1)
@@ -122,7 +139,9 @@ function main()
         if clicked_vertex[] != -1
             pos = SVector{2}(mouseposition(ax.scene))
             ind = SA[2clicked_vertex[] - 1, 2clicked_vertex[]]
-            D[ind] = pos - sim.X[ind]
+            target = pos - sim.X[ind]
+
+            D[ind] .+= normalize(target - D[ind]) .* sim.dt
         end
 
         sim.V .= (D .- sim.D) ./ sim.dt

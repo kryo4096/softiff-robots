@@ -22,11 +22,13 @@ mutable struct Simulation{S <: AbstractFloat,I <: Integer}
     vol::Vector{S}
     lambda::Vector{S}
     mu::Vector{S}
+
+    actuators::SparseMatrixCSC{S,I}
 end
 
-
 index_arr(ind) = SA[2 * ind[1] - 1, 2 * ind[1], 2 * ind[2] - 1, 2 * ind[2], 2 * ind[3] - 1, 2 * ind[3]]
-edge_mat(x) = SA[x[3] - x[1] x[5] - x[1]; x[4] - x[2] x[6] - x[2]]
+edge_mat(x) = SA[x[3] - x[1] x[5] - x[1]
+                 x[4] - x[2] x[6] - x[2]]
 
 function triangle_energy(d, A_inv, x_0, a, lambda, mu)
     F = edge_mat(x_0 + d) * A_inv
@@ -107,16 +109,12 @@ function init_hessian!(hess, sim::Simulation, init_val=1)
 
     N_p = size(sim.X)[1] ÷ 2
     N_t = size(sim.ind)[1]
-    
-    # per-triangle gradient
 
     for ti = 1:N_t
         inds = index_arr(sim.ind[ti])
 
         hess[inds, inds] .= init_val
     end
-
-    # per-vertex gradient
 
     for vi = 1:N_p
 
@@ -176,17 +174,17 @@ function compute_hessian!(hess, sim::Simulation, D_1, a=0.01)
     end
 end
     
-        struct Pass
-    alpha
-    iter
-    guess
-    tol
+    struct Pass
+alpha
+        iter
+        guess
+        tol
     end
 
     function line_search(gradient, passes::Vector{Pass})
         converged = false
 
-            grad = zeros(size(passes[1].guess))
+        grad = zeros(size(passes[1].guess))
         x = zeros(size(passes[1].guess))
 
         for (i, pass) in enumerate(passes)
@@ -223,7 +221,7 @@ function newton!(hess, hessian!, gradient!, x_guess, tol)
     x = x_guess
     grad = zeros(size(x))
 
-    for i in 1:1000
+    for i in 1:10
         grad .= 0
         gradient!(grad, x)
         hessian!(hess, x)
@@ -231,7 +229,6 @@ function newton!(hess, hessian!, gradient!, x_guess, tol)
         x .= x .- cg(hess, grad)
 
         if norm(grad) < tol
-            println("Converged after $i iterations.")
             break
         end
     end
