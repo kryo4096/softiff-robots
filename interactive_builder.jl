@@ -6,7 +6,8 @@ include("softbody.jl")
 
 function main()
     v = Node(zeros(0, 0))
-    ind = [SA[1,2,3]]
+    ind::Vector{SVector{3,Int64}} = []
+    sparse_act::Vector{IndexValuePair{Int64, Float64}} = []
 
     render_ind = Node([1,2,3])
 
@@ -48,6 +49,9 @@ function main()
                             ni = SA[i, ind[size(ind)[1]][1], ind[size(ind)[1]][2]]
 
                             push!(ind, ni)
+                            #push!(sparse_act, IndexValuePair(i, ind[size(ind)[1]][1]))
+                            #push!(sparse_act, IndexValuePair(i, ind[size(ind)[1]][2]))
+                            #push!(sparse_act, IndexValuePair(ind[size(ind)[1]][1], ind[size(ind)[1]][2]))
                             render_ind[] = Vector(vcat(ind...))
                             new_vertex = false
                         end
@@ -55,8 +59,11 @@ function main()
 
                     if new_vertex
 
-                        if n > 3
+                        if n >= 3
                             push!(ind, SA[n, n - 1, n - 2])
+                            #push!(sparse_act, IndexValuePair(n-2, n-1))
+                            #push!(sparse_act, IndexValuePair(n-2, n  ))
+                            #push!(sparse_act, IndexValuePair(n-1, n  ))
                             render_ind.val = Vector(vcat(ind...))
                         end
 
@@ -94,7 +101,9 @@ function main()
     A_inv = Vector(inv.(A))
     vol = abs.(0.5 * det.(A))
 
-    sim = Simulation(10.0, 1e5, 0.0, 100.,  0.001, X, zeros(2n_vertices), zeros(2n_vertices), ones(n_vertices), ind, A_inv, vol, lambda, mu)
+    sparse_actuators = unique(sparse_act)
+    push!(sparse_actuators, IndexValuePair(1, size(v[])[2], 1.0))
+    sim = Simulation(10.0, 1e5, 0.0, 100.,  0.001, X, zeros(2n_vertices), zeros(2n_vertices), ones(n_vertices), ind, A_inv, vol, lambda, mu, sparse_actuators, 1e4)
 
     clicked_vertex = Node(-1)
 
@@ -132,6 +141,8 @@ function main()
     while running[]
         hess_f(hess, D_1) = compute_hessian!(hess, sim, D_1)
         grad_f(grad, D_1) = compute_gradient!(grad, sim, D_1)
+
+        sim.actuators[1] = IndexValuePair(1, size(v[])[2], sin(i*sim.dt*10) + 1.01)
 
         # D = line_search(grad_f, [Pass(1.0, 10, sim.D + sim.V * sim.dt, 1e-3), Pass(0.1, 1000, sim.D, 1e-3)])
         D = newton!(hess, hess_f, grad_f, sim.D + sim.V * sim.dt, 1e-5)
