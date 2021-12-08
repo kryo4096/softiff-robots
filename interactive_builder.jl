@@ -142,10 +142,12 @@ function main()
         hess_f(hess, D_1) = compute_hessian!(hess, sim, D_1)
         grad_f(grad, D_1) = compute_gradient!(grad, sim, D_1)
 
-        sim.actuators[1] = IndexValuePair(1, size(v[])[2], sin(i*sim.dt*10) + 1.01)
+        sim.actuators[1] = IndexValuePair(1, size(v[])[2], cos(i*sim.dt*10)/2 + 0.51)
 
         # D = line_search(grad_f, [Pass(1.0, 10, sim.D + sim.V * sim.dt, 1e-3), Pass(0.1, 1000, sim.D, 1e-3)])
         D = newton!(hess, hess_f, grad_f, sim.D + sim.V * sim.dt, 1e-5)
+
+
 
         if clicked_vertex[] != -1
             pos = SVector{2}(mouseposition(ax.scene))
@@ -162,8 +164,16 @@ function main()
             v[] = reshape(sim.X + sim.D, 2, size(sim.X)[1] ÷ 2)
         end
 
+        #hess_inv = inv(hess)
+        #dLdx_T = transpose(ForwardDiff.gradient(loss, v))
+        #d_act = -transpose(hess_inv * dLdx_T) * ones(2*size(v[])[1], size(sim.actuators))
+
+
+        
+
         sleep(0.0001)
         i += 1
+        println("Maximum horizontal displacement is $(loss(v, 1))")
     end
 
     GLFW.SetWindowShouldClose(glfw_window, true)

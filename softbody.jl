@@ -38,7 +38,7 @@ mutable struct Simulation{S <: AbstractFloat,I <: Integer}
 
     actuators::Vector{IndexValuePair{I, S}}
     spring_stiffness::S
-end
+end 
 
 
 
@@ -347,4 +347,7 @@ function sparse_arr_to_mat(arr::Vector{IndexValuePair{I, S}}) where {S <: Abstra
     return sparse(row, col, val)
 end
 
+function loss(vertex_vec, direction)
+    direction*maximum(vertex_vec[][1,:])
+end
 
