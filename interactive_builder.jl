@@ -102,7 +102,7 @@ function main()
     vol = abs.(0.5 * det.(A))
 
     sparse_actuators = unique(sparse_act)
-    push!(sparse_actuators, IndexValuePair(1, size(v[])[2], 1.0))
+    push!(sparse_actuators, IndexValuePair(1, size(v[])[2]÷2, 1.0))
     sim = Simulation(10.0, 1e5, 0.0, 100.,  0.001, X, zeros(2n_vertices), zeros(2n_vertices), ones(n_vertices), ind, A_inv, vol, lambda, mu, sparse_actuators, 1e4)
 
     clicked_vertex = Node(-1)
@@ -142,9 +142,9 @@ function main()
         hess_f(hess, D_1) = compute_hessian!(hess, sim, D_1)
         grad_f(grad, D_1) = compute_gradient!(grad, sim, D_1)
 
-        sim.actuators[1] = IndexValuePair(1, size(v[])[2], cos(i*sim.dt*10)/2 + 0.51)
+        sim.actuators[1] = IndexValuePair(1, size(v[])[2]÷2, 1 + 0.5*sin(i*sim.dt*10))
 
-        # D = line_search(grad_f, [Pass(1.0, 10, sim.D + sim.V * sim.dt, 1e-3), Pass(0.1, 1000, sim.D, 1e-3)])
+        #D = line_search(grad_f, [Pass(1.0, 10, sim.D + sim.V * sim.dt, 1e-3), Pass(0.1, 1000, sim.D, 1e-3)])
         D = newton!(hess, hess_f, grad_f, sim.D + sim.V * sim.dt, 1e-5)
 
 
@@ -167,8 +167,6 @@ function main()
         #hess_inv = inv(hess)
         #dLdx_T = transpose(ForwardDiff.gradient(loss, v))
         #d_act = -transpose(hess_inv * dLdx_T) * ones(2*size(v[])[1], size(sim.actuators))
-
-
         
 
         sleep(0.0001)

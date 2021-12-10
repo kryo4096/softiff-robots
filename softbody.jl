@@ -5,19 +5,6 @@ using StaticArrays
 using IterativeSolvers
 using SparseArrays
 
-struct IndexValuePair{I <: Integer,S <: AbstractFloat}
-    i::I
-    j::I
-    val::S
-    
-    function IndexValuePair(i::I, j::I) where {I <: Integer}
-        new{I, Float64}(min(i, j), max(i, j), rand(Float64)*0.9 +0.1)
-    end 
-    function IndexValuePair(i::I, j::I, v::S) where {I <: Integer, S <: AbstractFloat}
-        new{I, Float64}(min(i, j), max(i, j), v)
-    end 
-end
-
 mutable struct Simulation{S <: AbstractFloat,I <: Integer}
     g::S
     floor_force::S
@@ -36,14 +23,11 @@ mutable struct Simulation{S <: AbstractFloat,I <: Integer}
     lambda::Vector{S}
     mu::Vector{S}
 
-    actuators::Vector{IndexValuePair{I, S}}
+    actuators_i::Vector{I}
+    actuators_j::Vector{I}
+    a::Vector{S}
     spring_stiffness::S
 end 
-
-
-
-#Used for applying unique on Index Value Pairs
-Base.hash(x::IndexValuePair, h::UInt) = hash((x.i, x.j), h)
 
 function SortIVP(a::IndexValuePair, b::IndexValuePair)
     if isless(a.i, b.i)
@@ -55,41 +39,34 @@ function SortIVP(a::IndexValuePair, b::IndexValuePair)
     return false
 end
 
-
-Base.:isless(a::IndexValuePair, b::IndexValuePair) = SortIVP(a, b)
-
 index_arr(ind) = SA[2 * ind[1] - 1, 2 * ind[1], 2 * ind[2] - 1, 2 * ind[2], 2 * ind[3] - 1, 2 * ind[3]]
 edge_mat(x) = SA[x[3] - x[1] x[5] - x[1]
                  x[4] - x[2] x[6] - x[2]]
 
 function triangle_energy(d, A_inv, x_0, a, lambda, mu)
     F = edge_mat(x_0 + d) * A_inv
-
     dF = det(F)
-
     lJ = dF > a ? log(dF) : log(a) + 1 / a * (dF - a) - 1 / a^2 * (dF - a)^2
-
     E = mu * (0.5 * (tr(F' * F) - 3.0) - lJ) + 0.5 * lambda * lJ^2
-
     return E
 end
 
 function actuation_energy(d, spring_stiffness, x_0, actuation, dt)
-    
     initial_length = sqrt((x_0[3]-x_0[1])^2 + (x_0[4]-x_0[2])^2)
+
     d_p = x_0 + d
+
     current_length = sqrt((d_p[3]-d_p[1])^2 + (d_p[4]-d_p[2])^2)
+
     E = 0.5* spring_stiffness * (current_length/(initial_length * actuation) - 1)^2
+
     return dt^2 * E
 end
 
 function vertex_energy(d, d_0, v_0, x_0, dt, m, floor_height, floor_force, floor_friction, g)  
     I = 0.5 * sum((d - (d_0 + v_0 * dt)).^2) * m
-
     p = x_0 + d
-
     E = 0.0
-
     v = (d .- d_0) / dt
     
     if p[2] > floor_height
@@ -104,7 +81,7 @@ end
 function compute_gradient!(grad, sim::Simulation, D_1, a=0.01)
     N_p = size(sim.X)[1] ÷ 2
     N_t = size(sim.ind)[1]
-    N_a = size(sim.actuators)[1]
+    N_a = size(sim.a)[1]
 
     lk = ReentrantLock()
 
@@ -128,9 +105,9 @@ function compute_gradient!(grad, sim::Simulation, D_1, a=0.01)
     
     # per-actuation gradient
     Threads.@threads for ai = 1:N_a
-        row = sim.actuators[ai].i
-        col = sim.actuators[ai].j
-        act = sim.actuators[ai].val
+        row = sim.actuators_i[ai]
+        col = sim.actuators_j[ai]
+        act = sim.actuators_a[ai]
 
         inds = SA[2 * col - 1, 2 * col, 2*row - 1, 2*row]
 
@@ -181,8 +158,8 @@ function init_hessian!(hess, sim::Simulation, init_val=1)
     end
 
     for ai = 1:N_a
-        row = sim.actuators[ai].i
-        col = sim.actuators[ai].j
+        row = sim.actuators_i[ai]
+        col = sim.actuators_j[ai]
 
         inds = SA[2 * col - 1, 2 * col, 2*row - 1, 2*row]
 
@@ -228,9 +205,9 @@ function compute_hessian!(hess, sim::Simulation, D_1, a=0.01)
 
     #Per-actuation gradient
     Threads.@threads for ai = 1:N_a
-        row = sim.actuators[ai].i
-        col = sim.actuators[ai].j
-        act = sim.actuators[ai].val
+        row = sim.actuators_i[ai]
+        col = sim.actuators_j[ai]
+        act = sim.a[ai]
 
         inds = [2 * col - 1, 2 * col, 2*row - 1, 2*row]
 
@@ -268,46 +245,46 @@ function compute_hessian!(hess, sim::Simulation, D_1, a=0.01)
     end
 end
     
-    struct Pass
-alpha
-        iter
-        guess
-        tol
-    end
+struct Pass
+    alpha
+    iter
+    guess
+    tol
+end
 
-    function line_search(gradient, passes::Vector{Pass})
-        converged = false
+function line_search(gradient, passes::Vector{Pass})
+    converged = false
 
-        grad = zeros(size(passes[1].guess))
-        x = zeros(size(passes[1].guess))
+    grad = zeros(size(passes[1].guess))
+    x = zeros(size(passes[1].guess))
 
-        for (i, pass) in enumerate(passes)
-            if converged 
+    for (i, pass) in enumerate(passes)
+        if converged 
+            break
+        end
+
+        x .= pass.guess
+
+        for k = 1:pass.iter
+            grad .= 0.0
+
+            gradient(grad, x)
+
+            x .= x .- grad .* pass.alpha
+
+            if norm(grad) < pass.tol
+                # println("converged after $k iterations in $(i)th pass, |∇E| = $(norm(grad))")
+                converged = true
                 break
             end
-
-            x .= pass.guess
-
-            for k = 1:pass.iter
-                grad .= 0.0
-
-                gradient(grad, x)
-
-                x .= x .- grad .* pass.alpha
-
-                if norm(grad) < pass.tol
-                    # println("converged after $k iterations in $(i)th pass, |∇E| = $(norm(grad))")
-                    converged = true
-                    break
-                end
-            end
         end
+    end
 
-        if !converged
-            println("WARNING! no convergence")
-        end
+    if !converged
+        println("WARNING! no convergence")
+    end
 
-        return x
+    return x
 end
 
 function newton!(hess, hessian!, gradient!, x_guess, tol)
@@ -328,7 +305,7 @@ function newton!(hess, hessian!, gradient!, x_guess, tol)
     end
 
     if norm(grad) > tol
-println("WARNING: No convergence!")
+        println("WARNING: No convergence!")
     end
 
     return x
@@ -345,9 +322,5 @@ function sparse_arr_to_mat(arr::Vector{IndexValuePair{I, S}}) where {S <: Abstra
         push!(val, elem.val)
     end
     return sparse(row, col, val)
-end
-
-function loss(vertex_vec, direction)
-    direction*maximum(vertex_vec[][1,:])
 end
 
