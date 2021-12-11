@@ -5,11 +5,14 @@ module SimulationBuilder
 
     using GLMakie
     using LinearAlgebra
+    using Gtk
+    using JSON
+    using FileIO
 
     const I = Int64
     const S = Float64
 
-    @enum PlacementMode ModifyMode VertexMode TriangleMode ActuatorMode 
+    @enum PlacementMode SelectMode VertexMode TriangleMode ActuatorMode 
 
     mutable struct BuilderState
         vertices::Matrix{S}
@@ -20,7 +23,7 @@ module SimulationBuilder
     end
 
     function create()
-        state = Observable(BuilderState(Matrix{S}(undef, 2,0), Vector{I}(), Vector{Tuple{I,I}}(), ModifyMode, ()))
+        state = Observable(BuilderState(Matrix{S}(undef, 2,0), Vector{I}(), Vector{Tuple{I,I}}(), SelectMode, ()))
 
         fig = Figure()
 
@@ -29,14 +32,14 @@ module SimulationBuilder
             aspect = 1, 
             limits = (-1., 1., -0.1, 1.9), 
             title = lift(state) do st
-                if st.mode == ModifyMode
-                    "Normal"
+                if st.mode == SelectMode
+                    " - Select (S) - | Vertex (V) | Triangle (T) | Actuator (A)"
                 elseif st.mode == VertexMode
-                    "Vertex"
+                    "Select(S) | - Vertex (V) - | Triangle (T) | Actuator (A)"
                 elseif st.mode == TriangleMode
-                    "Triangle"
+                    "Select(S) | Vertex (V) | - Triangle (T) - | Actuator (A)"
                 elseif st.mode == ActuatorMode
-                    "Actuator"
+                    "Select(S) | Vertex (V) | Triangle (T) | - Actuator (A) -"
                 end
             end
         )
@@ -106,7 +109,7 @@ module SimulationBuilder
         )
 
         scatter!(lift(state) do st
-            if st.mode==ModifyMode && st.mode_state isa I
+            if st.mode==SelectMode && st.mode_state isa I
                 i = convert(I, st.mode_state)
                 Point2f(st.vertices[:,i])
             else
@@ -144,11 +147,13 @@ module SimulationBuilder
             switch_mode(st, ActuatorMode)
         elseif event.key==Keyboard.t
             switch_mode(st, TriangleMode)
-        elseif event.key==Keyboard.escape
-            switch_mode(st, ModifyMode)
+        elseif event.key==Keyboard.s
+            switch_mode(st, SelectMode)
+        elseif event.key == Keyboard.w && event.action == Keyboard.press
+            save(st)
         end
         
-        if st.mode==ModifyMode
+        if st.mode==SelectMode
             if event.key==Keyboard.delete && event.action == Keyboard.press && st.mode_state isa I
                 i = convert(I, st.mode_state)
 
@@ -180,7 +185,7 @@ module SimulationBuilder
     end
 
     function on_click(st::BuilderState, event, mpos)
-        if st.mode == ModifyMode
+        if st.mode == SelectMode
             if event.action == Mouse.press && event.button == Mouse.left
 
                 st.mode_state = ()
@@ -261,6 +266,40 @@ module SimulationBuilder
             push!(state.indices, index)
         end
     end
+
+    function save(st::BuilderState)
+
+        filename = save_dialog("Save...", GtkNullContainer(), (GtkFileFilter("*.json", name="All supported formats"), "*.json"))
+
+        if filename != ""
+
+            n = size(st.vertices)[2]
+
+            vertices = []
+            
+            vertmap = zeros(I, n)
+
+            vi = 1
+            for i in 1:n
+                if !any(isnan.(st.vertices[:,i]))
+                    append!(vertices, st.vertices[:, i])
+
+                    vertmap[i] = vi
+
+                    vi += 1
+                end
+            end
+
+            indices = [vertmap[i] for i in st.indices]
+            actuators = [(vertmap[i], vertmap[j]) for (i,j) in st.actuators]
+
+            open(filename, "w") do io
+                write(io, JSON.json(Dict("vertices" => vertices, "indices" => indices, "actuators" => actuators)))
+            end    
+        end
+    end
+
+    function close(st::BuilderState)
 end
 
 function test()
