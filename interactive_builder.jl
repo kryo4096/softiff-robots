@@ -2,18 +2,15 @@ using GLMakie
 using GLMakie.GLFW
 using StaticArrays
 
-include("softbody.jl")
-
 function main()
     v = Node(zeros(0, 0))
-    ind::Vector{SVector{3,Int64}} = []
-    sparse_act::Vector{IndexValuePair{Int64, Float64}} = []
+    ind = Vector{SVector{3,Int64}}()
+    sparse_i = Vector{Int64}()
+    sparse_j = Vector{Int64}()
 
     render_ind = Node([1,2,3])
 
     f = Figure(resolution=(640, 640))
-
-
     ax = Axis(f[1, 1], aspect=1, limits=(-0.1, 1.1, -0.1, 1.1))
 
     deactivate_interaction!(ax, :rectanglezoom)
@@ -40,7 +37,7 @@ function main()
                 if event.action == Mouse.press
                     n = size(v[])[2] + 1
 
-                    pos = Vector(mouseposition(ax.scene))
+                    
 
                     new_vertex = true
 
@@ -49,9 +46,6 @@ function main()
                             ni = SA[i, ind[size(ind)[1]][1], ind[size(ind)[1]][2]]
 
                             push!(ind, ni)
-                            #push!(sparse_act, IndexValuePair(i, ind[size(ind)[1]][1]))
-                            #push!(sparse_act, IndexValuePair(i, ind[size(ind)[1]][2]))
-                            #push!(sparse_act, IndexValuePair(ind[size(ind)[1]][1], ind[size(ind)[1]][2]))
                             render_ind[] = Vector(vcat(ind...))
                             new_vertex = false
                         end
@@ -61,9 +55,6 @@ function main()
 
                         if n >= 3
                             push!(ind, SA[n, n - 1, n - 2])
-                            #push!(sparse_act, IndexValuePair(n-2, n-1))
-                            #push!(sparse_act, IndexValuePair(n-2, n  ))
-                            #push!(sparse_act, IndexValuePair(n-1, n  ))
                             render_ind.val = Vector(vcat(ind...))
                         end
 

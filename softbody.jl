@@ -29,16 +29,6 @@ mutable struct Simulation{S <: AbstractFloat,I <: Integer}
     spring_stiffness::S
 end 
 
-function SortIVP(a::IndexValuePair, b::IndexValuePair)
-    if isless(a.i, b.i)
-        return true
-    end
-    if isless(a.j, b.j)
-        return true
-    end
-    return false
-end
-
 index_arr(ind) = SA[2 * ind[1] - 1, 2 * ind[1], 2 * ind[2] - 1, 2 * ind[2], 2 * ind[3] - 1, 2 * ind[3]]
 edge_mat(x) = SA[x[3] - x[1] x[5] - x[1]
                  x[4] - x[2] x[6] - x[2]]
@@ -107,7 +97,7 @@ function compute_gradient!(grad, sim::Simulation, D_1, a=0.01)
     Threads.@threads for ai = 1:N_a
         row = sim.actuators_i[ai]
         col = sim.actuators_j[ai]
-        act = sim.actuators_a[ai]
+        act = sim.a[ai]
 
         inds = SA[2 * col - 1, 2 * col, 2*row - 1, 2*row]
 
@@ -141,8 +131,6 @@ function compute_gradient!(grad, sim::Simulation, D_1, a=0.01)
                 grad[inds] += contrib
         end
     end
-
-
 end
 
 function init_hessian!(hess, sim::Simulation, init_val=1)
@@ -288,7 +276,6 @@ function line_search(gradient, passes::Vector{Pass})
 end
 
 function newton!(hess, hessian!, gradient!, x_guess, tol)
-    
     x = x_guess
     grad = zeros(size(x))
 
@@ -309,18 +296,5 @@ function newton!(hess, hessian!, gradient!, x_guess, tol)
     end
 
     return x
-end
-
-function sparse_arr_to_mat(arr::Vector{IndexValuePair{I, S}}) where {S <: AbstractFloat, I <: Integer}
-    row = []
-    col = []
-    val::Vector{S} = []
-    for i in 1:size(arr)[1]
-        elem = arr[i]
-        push!(row, elem.i)
-        push!(col, elem.j)
-        push!(val, elem.val)
-    end
-    return sparse(row, col, val)
 end
 
