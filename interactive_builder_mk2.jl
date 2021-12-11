@@ -105,18 +105,21 @@ module SimulationBuilder
             end
         )
 
+        scatter!(lift(state) do st
+            if st.mode==ModifyMode && st.mode_state isa I
+                i = convert(I, st.mode_state)
+                Point2f(st.vertices[:,i])
+            else
+                Point2f(NaN, NaN)
+            end
+        end)
+
         on(events(fig).keyboardbutton) do event
             st = state.val
+
+            on_kb(st, event)
             
-            if event.key==Keyboard.v 
-                switch_mode(st, VertexMode)
-            elseif event.key==Keyboard.a
-                switch_mode(st, ActuatorMode)
-            elseif event.key==Keyboard.t
-                switch_mode(st, TriangleMode)
-            elseif event.key==Keyboard.escape
-                switch_mode(st, ModifyMode)
-            end
+          
         end
 
         on(events(fig).mousebutton) do event
@@ -134,9 +137,61 @@ module SimulationBuilder
         end
     end
 
+    function on_kb(st::BuilderState, event)
+        if event.key==Keyboard.v 
+            switch_mode(st, VertexMode)
+        elseif event.key==Keyboard.a
+            switch_mode(st, ActuatorMode)
+        elseif event.key==Keyboard.t
+            switch_mode(st, TriangleMode)
+        elseif event.key==Keyboard.escape
+            switch_mode(st, ModifyMode)
+        end
+        
+        if st.mode==ModifyMode
+            if event.key==Keyboard.delete && event.action == Keyboard.press && st.mode_state isa I
+                i = convert(I, st.mode_state)
+
+                st.vertices[:, i] = [NaN, NaN]
+
+                indices = []
+
+                for k in 1:length(st.indices)÷3
+                    tri = 3k-2:3k
+                    if !any(st.indices[tri].==i)
+                        append!(indices, st.indices[tri])
+                    end
+                end
+
+                actuators = []
+
+                for (ai, aj) in st.actuators
+                    if ai != i && aj != I
+                        push!(actuators,(ai, aj))
+                    end
+                end
+
+                st.indices = indices
+                st.actuators = actuators
+
+                st.mode_state = ()
+            end
+        end
+    end
+
     function on_click(st::BuilderState, event, mpos)
         if st.mode == ModifyMode
-                
+            if event.action == Mouse.press && event.button == Mouse.left
+
+                st.mode_state = ()
+
+                for i in 1:size(st.vertices)[2]
+                    if norm(st.vertices[:,i] - mpos) < 0.05
+                        st.mode_state = i
+                        break
+                    end
+                end
+            end
         elseif st.mode == VertexMode
             if event.action == Mouse.press && event.button == Mouse.left
                 add_vertex!(st, mpos)
@@ -170,14 +225,13 @@ module SimulationBuilder
                 act = convert(Vector{I}, st.mode_state)
 
                 for i in 1:size(st.vertices)[2]
-                    if norm(st.vertices[:,i] - mpos) < 0.05
+                    if norm(st.vertices[:,i] - mpos) < 0.05 && (length(act) == 0 || act[1] != i)
                         push!(act, i)
                         break
                     end
                 end
                 
                 if length(act) == 2
-                    
                     push!(st.actuators, (act[1], act[2]))
                     switch_mode(st, ActuatorMode)
                 end
@@ -192,7 +246,6 @@ module SimulationBuilder
     end
 
     function on_mode_end(st::BuilderState)
-        display(st.actuators)
     end
 
     function redraw(state::Observable{BuilderState})
