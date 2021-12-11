@@ -298,8 +298,6 @@ module SimulationBuilder
             end    
         end
     end
-
-    function close(st::BuilderState)
 end
 
 function test()
