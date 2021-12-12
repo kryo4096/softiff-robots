@@ -21,6 +21,7 @@ module SimulationBuilder
         mode_state::Any
     end
 
+
     function create()
         state = Observable(BuilderState(Matrix{S}(undef, 2, 0), Vector{I}(), Vector{Tuple{I,I}}(), SelectMode, ()))
 

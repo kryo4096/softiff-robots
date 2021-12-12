@@ -5,6 +5,7 @@ module Softbody
     using StaticArrays
     using IterativeSolvers
     using SparseArrays
+    using Zygote: @adjoint
 
 
     mutable struct Simulation{S <: AbstractFloat,I <: Integer}
@@ -110,8 +111,8 @@ module Softbody
 
         # per-triangle gradient
 
-        Threads.@threads for ti = 1:N_t
-
+        #Threads.@threads for ti = 1:N_t
+        for ti = 1:N_t
             inds = index_arr(sim.ind[ti])
 
             x_0 = sim.X[inds]
@@ -121,13 +122,14 @@ module Softbody
 
             contrib = sim.dt^2 * sim.vol[ti] * ForwardDiff.gradient(E, d_1)
 
-            lock(lk) do
+            #lock(lk) do
                 grad[inds] += contrib
-            end
+            #end
         end
         
         # per-actuation gradient
-        Threads.@threads for ai = 1:N_a
+        #Threads.@threads for ai = 1:N_a
+        for ai = 1:N_a
             row = sim.actuators_i[ai]
             col = sim.actuators_j[ai]
             act = sim.a[ai]
@@ -141,14 +143,14 @@ module Softbody
 
             contrib = ForwardDiff.gradient(E, d_1)
 
-            lock(lk) do 
+            #lock(lk) do 
                 grad[inds] += contrib 
-            end
+            #end
         end
 
         # per-vertex gradient
-        Threads.@threads for vi = 1:N_p
-
+        #Threads.@threads for vi = 1:N_p
+        for vi = 1:N_p
             inds = SA[2 * vi - 1, 2 * vi]
 
             x_0 = sim.X[inds]
@@ -160,9 +162,9 @@ module Softbody
 
             contrib = ForwardDiff.gradient(E, d_1)
 
-            lock(lk) do
+            #lock(lk) do
                     grad[inds] += contrib
-            end
+            #end
         end
     end
    
@@ -208,8 +210,8 @@ module Softbody
 
         # per-triangle gradient
 
-        Threads.@threads for ti = 1:N_t
-
+        #Threads.@threads for ti = 1:N_t
+        for ti = 1:N_t
             inds = Vector(index_arr(sim.ind[ti]))
 
             x_0 = sim.X[inds]
@@ -219,13 +221,14 @@ module Softbody
 
             contrib = sim.dt^2 * sim.vol[ti] * ForwardDiff.hessian(E, d_1)
 
-            lock(lk) do
+            #lock(lk) do
                 hess[inds, inds] .+= contrib
-            end
+            #end
         end
 
         #Per-actuation gradient
-        Threads.@threads for ai = 1:N_a
+        #Threads.@threads for ai = 1:N_a
+        for ai = 1:N_a
             row = sim.actuators_i[ai]
             col = sim.actuators_j[ai]
             act = sim.a[ai]
@@ -239,15 +242,15 @@ module Softbody
 
             contrib = ForwardDiff.hessian(E, d_1)
 
-            lock(lk) do 
+            #lock(lk) do 
                 hess[inds, inds] .+= contrib
-            end
+            #end
         end
 
         # per-vertex gradient
 
-        Threads.@threads for vi = 1:N_p
-
+        #Threads.@threads for vi = 1:N_p
+        for vi = 1:N_p
             inds = [2 * vi - 1, 2 * vi]
 
             x_0 = sim.X[inds]
@@ -259,9 +262,9 @@ module Softbody
 
             contrib = ForwardDiff.hessian(E, d_1)
 
-            lock(lk) do
+            #lock(lk) do
                 hess[inds, inds] .+= contrib
-            end
+            #end
 
         end
     end
@@ -315,8 +318,12 @@ module Softbody
         sim.D .= D
     end
 
-    function simulation_gradient()
-
+    function simulation_gradient(sim, a)
+        return ones(size(a))
     end
+
+    @adjoint step!(sim, a) = step!(sim, a), out -> out * simulation_gradient(sim, a)
 end
+
+
 

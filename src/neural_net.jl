@@ -39,8 +39,18 @@ end
 function update(nn::NeuralNet, loss)
     dnn = gradient(loss, nn)[1]
     learning_rate = 0.05
-    nn.w1 -= learning_rate * dnn.w1
-    nn.b1 -= learning_rate * dnn.b1
-    nn.w2 -= learning_rate * dnn.w2
-    nn.b2 -= learning_rate * dnn.b2
+    nn.w1 += learning_rate * dnn.w1
+    nn.b1 += learning_rate * dnn.b1
+    nn.w2 += learning_rate * dnn.w2
+    nn.b2 += learning_rate * dnn.b2
+end
+
+function reward(sim, dir)
+    com = [0, 0]
+
+    for i = 1:2:length(sim.X)
+        com += [sim.X[i] + sim.D[i], sim.X[i+1] + sim.D[i+1]]
+    end
+    com /= 0.5*size(sim.X)[1]
+    return com[1]*dir[1] + com[2]*dir[2]
 end
