@@ -1,300 +1,313 @@
-using LinearAlgebra
-using GLMakie
-using ForwardDiff
-using StaticArrays
-using IterativeSolvers
-using SparseArrays
+module Softbody
+    using LinearAlgebra
+    using GLMakie
+    using ForwardDiff
+    using StaticArrays
+    using IterativeSolvers
+    using SparseArrays
 
-mutable struct Simulation{S <: AbstractFloat,I <: Integer}
-    g::S
-    floor_force::S
-    floor_height::S
-    floor_friction::S
-    dt::S
 
-    X::Vector{S}
-    D::Vector{S}
-    V::Vector{S}
-    M::Vector{S}
+    mutable struct Simulation{S <: AbstractFloat,I <: Integer}
+        g::S
+        floor_force::S
+        floor_height::S
+        floor_friction::S
+        dt::S
 
-    ind::Vector{SVector{3,I}}
-    A_inv::Vector{SMatrix{2,2,S,4}}
-    vol::Vector{S}
-    lambda::Vector{S}
-    mu::Vector{S}
+        X::Vector{S}
+        D::Vector{S}
+        V::Vector{S}
+        M::Vector{S}
 
-    actuators_i::Vector{I}
-    actuators_j::Vector{I}
-    a::Vector{S}
-    spring_stiffness::S
-end 
+        ind::Vector{SVector{3,I}}
+        A_inv::Vector{SMatrix{2,2,S,4}}
+        vol::Vector{S}
+        lambda::Vector{S}
+        mu::Vector{S}
 
-index_arr(ind) = SA[2 * ind[1] - 1, 2 * ind[1], 2 * ind[2] - 1, 2 * ind[2], 2 * ind[3] - 1, 2 * ind[3]]
-edge_mat(x) = SA[x[3] - x[1] x[5] - x[1]
-                 x[4] - x[2] x[6] - x[2]]
+        actuators_i::Vector{I}
+        actuators_j::Vector{I}
+        a::Vector{S}
+        spring_stiffness::S
+    end 
 
-function triangle_energy(d, A_inv, x_0, a, lambda, mu)
-    F = edge_mat(x_0 + d) * A_inv
-    dF = det(F)
-    lJ = dF > a ? log(dF) : log(a) + 1 / a * (dF - a) - 1 / a^2 * (dF - a)^2
-    E = mu * (0.5 * (tr(F' * F) - 3.0) - lJ) + 0.5 * lambda * lJ^2
-    return E
-end
-
-function actuation_energy(d, spring_stiffness, x_0, actuation, dt)
-    initial_length = sqrt((x_0[3]-x_0[1])^2 + (x_0[4]-x_0[2])^2)
-
-    d_p = x_0 + d
-
-    current_length = sqrt((d_p[3]-d_p[1])^2 + (d_p[4]-d_p[2])^2)
-
-    E = 0.5* spring_stiffness * (current_length/(initial_length * actuation) - 1)^2
-
-    return dt^2 * E
-end
-
-function vertex_energy(d, d_0, v_0, x_0, dt, m, floor_height, floor_force, floor_friction, g)  
-    I = 0.5 * sum((d - (d_0 + v_0 * dt)).^2) * m
-    p = x_0 + d
-    E = 0.0
-    v = (d .- d_0) / dt
-    
-    if p[2] > floor_height
-        E += g * p[2] * m
-    else
-        E += floor_force * (floor_height - p[2])^2 + v[1]^2 * (floor_height - p[2]) * floor_friction
-    end
-
-    return I + dt^2 * E
-end
-
-function compute_gradient!(grad, sim::Simulation, D_1, a=0.01)
-    N_p = size(sim.X)[1] ÷ 2
-    N_t = size(sim.ind)[1]
-    N_a = size(sim.a)[1]
-
-    lk = ReentrantLock()
-
-    # per-triangle gradient
-
-    Threads.@threads for ti = 1:N_t
-
-        inds = index_arr(sim.ind[ti])
-
-        x_0 = sim.X[inds]
-        d_1 = D_1[inds]
-
-        E(d) = triangle_energy(d, sim.A_inv[ti], x_0, a, sim.lambda[ti], sim.mu[ti])
-
-        contrib = sim.dt^2 * sim.vol[ti] * ForwardDiff.gradient(E, d_1)
-
-        lock(lk) do
-            grad[inds] += contrib
-        end
-    end
-    
-    # per-actuation gradient
-    Threads.@threads for ai = 1:N_a
-        row = sim.actuators_i[ai]
-        col = sim.actuators_j[ai]
-        act = sim.a[ai]
-
-        inds = SA[2 * col - 1, 2 * col, 2*row - 1, 2*row]
-
-        x_0 = sim.X[inds]
-        d_1 = D_1[inds]
-
-        E(d) = actuation_energy(d, sim.spring_stiffness, x_0, act, sim.dt)
-
-        contrib = ForwardDiff.gradient(E, d_1)
-
-        lock(lk) do 
-            grad[inds] += contrib 
-        end
-    end
-
-    # per-vertex gradient
-    Threads.@threads for vi = 1:N_p
-
-        inds = SA[2 * vi - 1, 2 * vi]
-
-        x_0 = sim.X[inds]
-        v_0 = sim.V[inds]
-        d_0 = sim.D[inds]
-        d_1 = D_1[inds]
+    function create_simulation(vertices::Vector, indices::Vector, actuators::Vector, ;g=9.8, floor_force=1e4, floor_height=0.0, floor_friction=1e2, dt=1e-3, lambda=1e5, mu=1e5, spring_stiffness=1e2, m = 1)
         
-        E(d) = vertex_energy(d, d_0, v_0, x_0, sim.dt, sim.M[vi], sim.floor_height, sim.floor_force, sim.floor_friction, sim.g)
+        D = zeros(size(vertices))
+        V = zeros(size(vertices))
+        M = ones(size(vertices)[1]÷2) * m
 
-        contrib = ForwardDiff.gradient(E, d_1)
+        ind = [SA[indices[i], indices[i+1], indices[i+2]] for i in 1:3:length(indices)]
+        actuators_i = [i for (i,_) in actuators]
+        actuators_j = [j for (_,j) in actuators]
+        a = ones(size(actuators_i))
 
-        lock(lk) do
+        lambda_vec = ones(size(ind)) * lambda
+        mu_vec = ones(size(ind)) * mu
+
+        A = map(ti -> edge_mat(vertices[index_arr(ind[ti])]), 1:length(ind))
+        A_inv = Vector(inv.(A))
+        vol = abs.(0.5 * det.(A))
+
+        Simulation(g, floor_force, floor_height, floor_friction, dt, vertices, D, V, M, ind, A_inv, vol, lambda_vec, mu_vec, actuators_i, actuators_j, a, spring_stiffness)
+    end
+
+    function render_verts(sim::Simulation)
+        reshape(sim.X + sim.D, 2, length(sim.X)÷2)
+    end
+
+    index_arr(ind) = SA[2 * ind[1] - 1, 2 * ind[1], 2 * ind[2] - 1, 2 * ind[2], 2 * ind[3] - 1, 2 * ind[3]]
+    edge_mat(x) = SA[x[3] - x[1] x[5] - x[1]
+                    x[4] - x[2] x[6] - x[2]]
+
+    function triangle_energy(d, A_inv, x_0, a, lambda, mu)
+        F = edge_mat(x_0 + d) * A_inv
+        dF = det(F)
+        lJ = dF > a ? log(dF) : log(a) + 1 / a * (dF - a) - 1 / a^2 * (dF - a)^2
+        E = mu * (0.5 * (tr(F' * F) - 3.0) - lJ) + 0.5 * lambda * lJ^2
+        return E
+    end
+
+    function actuation_energy(d, spring_stiffness, x_0, actuation, dt)
+        initial_length = sqrt((x_0[3]-x_0[1])^2 + (x_0[4]-x_0[2])^2)
+
+        d_p = x_0 + d
+
+        current_length = sqrt((d_p[3]-d_p[1])^2 + (d_p[4]-d_p[2])^2)
+
+        E = 0.5* spring_stiffness * (current_length/(initial_length * actuation) - 1)^2
+
+        return dt^2 * E
+    end
+
+    function vertex_energy(d, d_0, v_0, x_0, dt, m, floor_height, floor_force, floor_friction, g)  
+        I = 0.5 * sum((d - (d_0 + v_0 * dt)).^2) * m
+        p = x_0 + d
+        E = 0.0
+        v = (d .- d_0) / dt
+        
+        if p[2] > floor_height
+            E += g * p[2] * m
+        else
+            E += floor_force * (floor_height - p[2])^2 + v[1]^2 * (floor_height - p[2]) * floor_friction
+        end
+
+        return I + dt^2 * E
+    end
+
+    function compute_gradient!(grad, sim::Simulation, D_1, a=0.01)
+        N_p = size(sim.X)[1] ÷ 2
+        N_t = size(sim.ind)[1]
+        N_a = size(sim.a)[1]
+
+        lk = ReentrantLock()
+
+        # per-triangle gradient
+
+        Threads.@threads for ti = 1:N_t
+
+            inds = index_arr(sim.ind[ti])
+
+            x_0 = sim.X[inds]
+            d_1 = D_1[inds]
+
+            E(d) = triangle_energy(d, sim.A_inv[ti], x_0, a, sim.lambda[ti], sim.mu[ti])
+
+            contrib = sim.dt^2 * sim.vol[ti] * ForwardDiff.gradient(E, d_1)
+
+            lock(lk) do
                 grad[inds] += contrib
+            end
         end
-    end
-end
+        
+        # per-actuation gradient
+        Threads.@threads for ai = 1:N_a
+            row = sim.actuators_i[ai]
+            col = sim.actuators_j[ai]
+            act = sim.a[ai]
 
-function init_hessian!(hess, sim::Simulation, init_val=1)
+            inds = SA[2 * col - 1, 2 * col, 2*row - 1, 2*row]
 
-    N_p = size(sim.X)[1] ÷ 2
-    N_t = size(sim.ind)[1]
-    N_a = size(sim.actuators)[1]
+            x_0 = sim.X[inds]
+            d_1 = D_1[inds]
 
-    for ti = 1:N_t
-        inds = index_arr(sim.ind[ti])
+            E(d) = actuation_energy(d, sim.spring_stiffness, x_0, act, sim.dt)
 
-        hess[inds, inds] .= init_val
-    end
+            contrib = ForwardDiff.gradient(E, d_1)
 
-    for ai = 1:N_a
-        row = sim.actuators_i[ai]
-        col = sim.actuators_j[ai]
-
-        inds = SA[2 * col - 1, 2 * col, 2*row - 1, 2*row]
-
-        hess[inds, inds] .= init_val
-    end
-
-    for vi = 1:N_p
-
-        inds = SA[2 * vi - 1, 2 * vi]
-
-        hess[inds, inds] .= init_val
-    end
-
-    return hess
-end
-
-function compute_hessian!(hess, sim::Simulation, D_1, a=0.01)
-    N_p = size(sim.X)[1] ÷ 2
-    N_t = size(sim.ind)[1]
-    N_a = size(sim.actuators)[1]
-
-    lk = ReentrantLock()
-
-    init_hessian!(hess, sim, 0)
-
-    # per-triangle gradient
-
-    Threads.@threads for ti = 1:N_t
-
-        inds = Vector(index_arr(sim.ind[ti]))
-
-        x_0 = sim.X[inds]
-        d_1 = D_1[inds]
-
-        E(d) = triangle_energy(d, sim.A_inv[ti], x_0, a, sim.lambda[ti], sim.mu[ti])
-
-        contrib = sim.dt^2 * sim.vol[ti] * ForwardDiff.hessian(E, d_1)
-
-        lock(lk) do
-            hess[inds, inds] .+= contrib
-        end
-    end
-
-    #Per-actuation gradient
-    Threads.@threads for ai = 1:N_a
-        row = sim.actuators_i[ai]
-        col = sim.actuators_j[ai]
-        act = sim.a[ai]
-
-        inds = [2 * col - 1, 2 * col, 2*row - 1, 2*row]
-
-        x_0 = sim.X[inds]
-        d_1 = D_1[inds]
-
-        E(d) = actuation_energy(d, sim.spring_stiffness, x_0, act, sim.dt)
-
-        contrib = ForwardDiff.hessian(E, d_1)
-
-        lock(lk) do 
-            hess[inds, inds] .+= contrib
-        end
-    end
-
-    # per-vertex gradient
-
-    Threads.@threads for vi = 1:N_p
-
-        inds = [2 * vi - 1, 2 * vi]
-
-        x_0 = sim.X[inds]
-        v_0 = sim.V[inds]
-        d_0 = sim.D[inds]
-        d_1 = D_1[inds]
-
-        E(d) = vertex_energy(d, d_0, v_0, x_0, sim.dt, sim.M[vi], sim.floor_height, sim.floor_force, sim.floor_friction, sim.g)
-
-        contrib = ForwardDiff.hessian(E, d_1)
-
-        lock(lk) do
-            hess[inds, inds] .+= contrib
+            lock(lk) do 
+                grad[inds] += contrib 
+            end
         end
 
-    end
-end
-    
-struct Pass
-    alpha
-    iter
-    guess
-    tol
-end
+        # per-vertex gradient
+        Threads.@threads for vi = 1:N_p
 
-function line_search(gradient, passes::Vector{Pass})
-    converged = false
+            inds = SA[2 * vi - 1, 2 * vi]
 
-    grad = zeros(size(passes[1].guess))
-    x = zeros(size(passes[1].guess))
+            x_0 = sim.X[inds]
+            v_0 = sim.V[inds]
+            d_0 = sim.D[inds]
+            d_1 = D_1[inds]
+            
+            E(d) = vertex_energy(d, d_0, v_0, x_0, sim.dt, sim.M[vi], sim.floor_height, sim.floor_force, sim.floor_friction, sim.g)
 
-    for (i, pass) in enumerate(passes)
-        if converged 
-            break
-        end
+            contrib = ForwardDiff.gradient(E, d_1)
 
-        x .= pass.guess
-
-        for k = 1:pass.iter
-            grad .= 0.0
-
-            gradient(grad, x)
-
-            x .= x .- grad .* pass.alpha
-
-            if norm(grad) < pass.tol
-                # println("converged after $k iterations in $(i)th pass, |∇E| = $(norm(grad))")
-                converged = true
-                break
+            lock(lk) do
+                    grad[inds] += contrib
             end
         end
     end
+   
+    function init_hessian!(hess, sim::Simulation, init_val=1)
 
-    if !converged
-        println("WARNING! no convergence")
+        N_p = size(sim.X)[1] ÷ 2
+        N_t = size(sim.ind)[1]
+        N_a = size(sim.a)[1]
+
+        for ti = 1:N_t
+            inds = index_arr(sim.ind[ti])
+
+            hess[inds, inds] .= init_val
+        end
+
+        for ai = 1:N_a
+            row = sim.actuators_i[ai]
+            col = sim.actuators_j[ai]
+
+            inds = SA[2 * col - 1, 2 * col, 2*row - 1, 2*row]
+
+            hess[inds, inds] .= init_val
+        end
+
+        for vi = 1:N_p
+
+            inds = SA[2 * vi - 1, 2 * vi]
+
+            hess[inds, inds] .= init_val
+        end
+
+        return hess
     end
 
-    return x
-end
+    function compute_hessian!(hess, sim::Simulation, D_1, a=0.01)
+        N_p = size(sim.X)[1] ÷ 2
+        N_t = size(sim.ind)[1]
+        N_a = size(sim.a)[1]
 
-function newton!(hess, hessian!, gradient!, x_guess, tol)
-    x = x_guess
-    grad = zeros(size(x))
+        lk = ReentrantLock()
 
-    for i in 1:10
-        grad .= 0
-        gradient!(grad, x)
-        hessian!(hess, x)
+        init_hessian!(hess, sim, 0)
 
-        x .= x .- cg(hess, grad)
+        # per-triangle gradient
 
-        if norm(grad) < tol
-            break
+        Threads.@threads for ti = 1:N_t
+
+            inds = Vector(index_arr(sim.ind[ti]))
+
+            x_0 = sim.X[inds]
+            d_1 = D_1[inds]
+
+            E(d) = triangle_energy(d, sim.A_inv[ti], x_0, a, sim.lambda[ti], sim.mu[ti])
+
+            contrib = sim.dt^2 * sim.vol[ti] * ForwardDiff.hessian(E, d_1)
+
+            lock(lk) do
+                hess[inds, inds] .+= contrib
+            end
+        end
+
+        #Per-actuation gradient
+        Threads.@threads for ai = 1:N_a
+            row = sim.actuators_i[ai]
+            col = sim.actuators_j[ai]
+            act = sim.a[ai]
+
+            inds = [2 * col - 1, 2 * col, 2*row - 1, 2*row]
+
+            x_0 = sim.X[inds]
+            d_1 = D_1[inds]
+
+            E(d) = actuation_energy(d, sim.spring_stiffness, x_0, act, sim.dt)
+
+            contrib = ForwardDiff.hessian(E, d_1)
+
+            lock(lk) do 
+                hess[inds, inds] .+= contrib
+            end
+        end
+
+        # per-vertex gradient
+
+        Threads.@threads for vi = 1:N_p
+
+            inds = [2 * vi - 1, 2 * vi]
+
+            x_0 = sim.X[inds]
+            v_0 = sim.V[inds]
+            d_0 = sim.D[inds]
+            d_1 = D_1[inds]
+
+            E(d) = vertex_energy(d, d_0, v_0, x_0, sim.dt, sim.M[vi], sim.floor_height, sim.floor_force, sim.floor_friction, sim.g)
+
+            contrib = ForwardDiff.hessian(E, d_1)
+
+            lock(lk) do
+                hess[inds, inds] .+= contrib
+            end
+
         end
     end
-
-    if norm(grad) > tol
-        println("WARNING: No convergence!")
+        
+    struct Pass
+        alpha
+        iter
+        guess
+        tol
     end
 
-    return x
+    function newton!(hess, hessian!, gradient!, x_guess, tol)
+        x = x_guess
+        grad = zeros(size(x))
+
+        for i in 1:10
+            grad .= 0
+            gradient!(grad, x)
+            hessian!(hess, x)
+
+            x .= x .- cg(hess, grad)
+
+            if norm(grad) < tol
+                break
+            end
+        end
+
+        if norm(grad) > tol
+            println("WARNING: No convergence!")
+        end
+
+        return x
+    end
+
+    function step!(sim::Simulation, a::Vector; tol=1e-4)
+        sim.a = a
+        
+        hessian = spzeros(length(sim.X), length(sim.X))
+        init_hessian!(hessian, sim, 1.0)
+        grad = zeros(length(sim.X))
+
+        D = newton!(
+            hessian,
+            (h, d) -> compute_hessian!(h, sim, d),
+            (g, d) -> compute_gradient!(g, sim, d),
+            sim.D + sim.V * sim.dt,
+            tol
+        )
+
+        sim.V .= (D .- sim.D) ./ sim.dt
+        sim.D .= D
+    end
+
 end
 
