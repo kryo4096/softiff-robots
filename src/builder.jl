@@ -288,16 +288,12 @@ module SimulationBuilder
     end
 end
 
-function test()
+function run_builder(;fps=30)
     builder, fig = SimulationBuilder.create()
     display(fig)
 
-
     while true
-        sleep(0.1)
+        sleep(1/fps)
         SimulationBuilder.redraw(builder)
     end
-
 end
-
-test()
