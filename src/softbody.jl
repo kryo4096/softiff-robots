@@ -56,6 +56,15 @@ module Softbody
         reshape(sim.X + sim.D, 2, length(sim.X)÷2)
     end
 
+    function relu(x)
+        if x < 0
+            return 0
+        else
+            return x 
+        end
+    end
+    
+
     index_arr(ind) = SA[2 * ind[1] - 1, 2 * ind[1], 2 * ind[2] - 1, 2 * ind[2], 2 * ind[3] - 1, 2 * ind[3]]
     edge_mat(x) = SA[x[3] - x[1] x[5] - x[1]
                     x[4] - x[2] x[6] - x[2]]
@@ -85,12 +94,9 @@ module Softbody
         p = x_0 + d
         E = 0.0
         v = (d .- d_0) / dt
-        
-        if p[2] > floor_height
-            E += g * p[2] * m
-        else
-            E += floor_force * (floor_height - p[2])^2 + v[1]^2 * (floor_height - p[2]) * floor_friction
-        end
+
+        E += g * m * relu(p[2] - floor_height)
+        E += floor_force * relu(floor_height - p[2])^2 + v[1]^2 * relu(floor_height - p[2]) * floor_friction
 
         return I + dt^2 * E
     end
@@ -288,7 +294,7 @@ module Softbody
         end
 
         return x
-    end
+    end 
 
     function step!(sim::Simulation, a::Vector; tol=1e-4)
         sim.a = a
@@ -309,5 +315,8 @@ module Softbody
         sim.D .= D
     end
 
+    function simulation_gradient()
+
+    end
 end
 
