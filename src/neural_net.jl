@@ -36,8 +36,8 @@ function get_actuation(nn, input)
 end
 
 
-function update(nn::NeuralNet, loss)
-    dnn = gradient(loss, nn)[1]
+function update(nn::NeuralNet, reward)
+    dnn = gradient(reward, nn)[1]
     learning_rate = 0.05
     nn.w1 += learning_rate * dnn.w1
     nn.b1 += learning_rate * dnn.b1

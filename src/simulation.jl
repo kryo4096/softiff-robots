@@ -21,7 +21,7 @@ module Simulation
         vertices, indices,  actuators
     end
 
-    function run_simulation(sim, nn, direction, mv, running, max_sim=1000)
+    function run_simulation(sim, nn, direction, mv, running, max_sim=10000)
         for simulation_step = 1:max_sim
             running[] || break
             Softbody.step!(sim, get_actuation(nn, [sim.X; sim.V; direction[]]))
@@ -35,7 +35,7 @@ module Simulation
             end
         end
         
-        return reward(sim.X[i] .+ sim.D[i], direction[])
+        return reward(sim.X .+ sim.D, direction[])
     end
 
     function run(filename)
@@ -79,10 +79,11 @@ module Simulation
         max_train = 1000
         for training_step = 1:max_train
             running[] || break
+            sim = Softbody.create_simulation(robot...)
             run_simulation(sim, nn, direction, mv, running)
-            grad = gradient(run_simulation, sim, nn, direction, mv, running)
-            print(grad)
-            backpropagate()
+            #d_sim, d_nn, d_dir, d_mv, d_running = gradient(run_simulation, sim, nn, direction, mv, running)
+            #println(d_nn)
+            #backpropagate()
         end
 
         iter = 0

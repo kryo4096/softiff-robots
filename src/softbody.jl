@@ -215,12 +215,15 @@ module Softbody
             x_0 = sim.X[inds]
             d_1 = sim.D[inds]
 
-            En(a) = actuation_energy(d_1, sim.spring_stiffness, x_0, a, sim.dt)
+            E(d, a) = actuation_energy(d, sim.spring_stiffness, x_0, a, sim.dt)
+            En(vec) = E(vec[1], vec[2])
 
-            contrib_a = ForwardDiff.hessian(En, sim.a)
+            #?????????????????????????????
+
+            #contrib_a = zeros(4, 4)
 
             #lock(lk) do 
-                act_hess[inds, inds] += contrib_a
+                #act_hess[inds, inds] .+= contrib_a
             #end
         end
     end
@@ -347,15 +350,16 @@ module Softbody
         sim.D .= D
         sim.hessian = hessian
 
-        act_hess = compute_actuation_hessian!(sim, spzeros(length(sim.X), length(sim.X)))
+        act_hess = spzeros(length(sim.X), length(sim.X))
+        compute_actuation_hessian!(sim, act_hess)
         sim.actuation_hessian = act_hess
     end
 
     function simulation_gradient(sim, a)
-        dLdxT = transpose(gradient(reward, sim.X .+ sim.D, [0, 0])) #TODO CHECK IF THIS IS CORRECT DIRECTION
+        dLdxT = transpose(gradient(reward, sim.X .+ sim.D, [0, 0])) #TODO CHECK DIRECTION??????
         AT = sim.hessian \ dLdxT
-        dfda = 
-        return ones(size(a))
+        dfda = - transpose(AT) * sim.actuation_hessian
+        return dfda
     end
 
     @adjoint step!(sim, a) = step!(sim, a), out -> out * simulation_gradient(sim, a)
