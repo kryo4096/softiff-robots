@@ -4,6 +4,7 @@ module Simulation
     using LinearAlgebra
 
     include("softbody.jl")
+    include("neural_net.jl")
 
     function read_robot_file(filename)
         s = open(filename, "r") do io
@@ -49,12 +50,30 @@ module Simulation
 
     end
 
+    function run_simulation(sim, running, mv, nn)
+        iter = 0
+        while running[]
+            Softbody.step!(sim, get_actuation(nn, [sim.X; sim.V]))
+
+            Zygote.ignore() do
+                if iter%10==0
+                    mv[] = Softbody.render_verts(sim)
+                    sleep(0.001)
+                end
+                iter += 1
+            end
+          
+        end
+    end
+
     function run(filename)
         robot = read_robot_file(filename)
 
         sim = Softbody.create_simulation(robot...)
 
         v, i, a = robot
+
+        nn = NeuralNet(2*size(v)[1], 32, size(a)[1])
 
         fig = Figure()
 
@@ -76,17 +95,7 @@ module Simulation
 
         display(fig)
 
-        i = 0
-        while running[]
-            Softbody.step!(sim, 1 .+ 0.4 .* sin.(i/100 .+ (1:length(a))))
-
-            if i%10==0
-                mv[] = Softbody.render_verts(sim)
-                sleep(0.001)
-            end
-
-            i += 1
-        end
+        run_simulation(sim, running, mv, nn)
     end
 
 end
