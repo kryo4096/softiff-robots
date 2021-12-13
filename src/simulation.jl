@@ -20,6 +20,9 @@ module Simulation
         vertices, indices, actuators
     end
 
+    nestlevel() = 0
+    Zygote.@adjoint nestlevel() = nestlevel()+1, _ -> nothing
+
     function plot_actuators(fig_location, a, vertices)
 
         actuator_indices = Vector{Int64}()
@@ -50,20 +53,49 @@ module Simulation
 
     end
 
-    function run_simulation(sim, running, mv, nn)
+    function run_simulation(sim::Softbody.Simulation, mv, nn)
         iter = 0
-        while running[]
-            Softbody.step!(sim, get_actuation(nn, [sim.X; sim.V]))
+
+        while iter < 100
+            a = get_actuation(nn, [sim.X + sim.D;sim.V])
+
+            function D_1(a) 
+                print(nestlevel())
+                Softbody.newton(
+                    sim,
+                    (h, d) -> Softbody.compute_hessian!(h, sim, d, a),
+                    (g, d) -> Softbody.compute_gradient!(g, sim, d, a),
+                    sim.D,
+                    1e-6,
+                    2
+                )
+            end
+
+            function dDdA(a, D1F)
+                hess = zeros(length(sim.X), length(sim.X))
+                
+                d_1 = D1F(a)
+                Softbody.compute_hessian!(hess, sim, d_1, a)
+                cg(hess, Softbody.dfda(d_1, a))
+            end
+
+            eval("Zygote.@adjoint D_1(a)=D_1(a), y->(dDdA(a, D_1)*y,)")
+
+            D = D_1(a)
+            sim.V = (D - sim.D) / sim.dt
+            sim.D = D
 
             Zygote.ignore() do
                 if iter%10==0
                     mv[] = Softbody.render_verts(sim)
                     sleep(0.001)
                 end
-                iter += 1
             end
-          
+
+            iter += 1
         end
+
+        sim.D
     end
 
     function run(filename)
@@ -95,7 +127,8 @@ module Simulation
 
         display(fig)
 
-        run_simulation(sim, running, mv, nn)
+        x(nn) = run_simulation(sim, mv, nn)
+        Zygote.jacobian(x, nn)
     end
 
 end

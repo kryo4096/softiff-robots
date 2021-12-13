@@ -27,11 +27,10 @@ module Softbody
 
         actuators_i::Vector{I}
         actuators_j::Vector{I}
-        a::Vector{S}
         spring_stiffness::S
     end 
 
-    function create_simulation(vertices::Vector, indices::Vector, actuators::Vector, ;g=20.0, floor_force=5e3, floor_height=0.0, floor_friction=5e3, dt=0.005, lambda=5e3, mu=5e3, spring_stiffness=1e5, m = 1)
+    function create_simulation(vertices::Vector, indices::Vector, actuators::Vector, ;g=20.0, floor_force=5e3, floor_height=0.0, floor_friction=5e3, dt=0.005, lambda=5e3, mu=5e3, spring_stiffness=1e3, m = 1)
         D = zeros(size(vertices))
         V = zeros(size(vertices))
         M = ones(size(vertices)[1]÷2) * m
@@ -39,7 +38,6 @@ module Softbody
         ind = [SA[indices[i], indices[i+1], indices[i+2]] for i in 1:3:length(indices)]
         actuators_i = [i for (i,_) in actuators]
         actuators_j = [j for (_,j) in actuators]
-        a = ones(size(actuators_i))
 
         lambda_vec = ones(size(ind)) * lambda
         mu_vec = ones(size(ind)) * mu
@@ -48,7 +46,7 @@ module Softbody
         A_inv = Vector(inv.(A))
         vol = abs.(0.5 * det.(A))
 
-        Simulation(g, floor_force, floor_height, floor_friction, dt, vertices, D, V, M, ind, A_inv, vol, lambda_vec, mu_vec, actuators_i, actuators_j, a, spring_stiffness)
+        Simulation(g, floor_force, floor_height, floor_friction, dt, vertices, D, V, M, ind, A_inv, vol, lambda_vec, mu_vec, actuators_i, actuators_j, spring_stiffness)
     end
 
     function render_verts(sim::Simulation)
@@ -100,10 +98,10 @@ module Softbody
         return I / dt^2 + E
     end
 
-    function compute_gradient!(grad, sim::Simulation, D_1, a=0.01)
+    function compute_gradient!(grad, sim::Simulation, D_1, A, a=0.01)
         N_p = size(sim.X)[1] ÷ 2
         N_t = size(sim.ind)[1]
-        N_a = size(sim.a)[1]
+        N_a = size(A)[1]
 
         # per-triangle gradient
 
@@ -123,7 +121,7 @@ module Softbody
         for ai = 1:N_a
             row = sim.actuators_i[ai]
             col = sim.actuators_j[ai]
-            act = sim.a[ai]
+            act = A[ai]
 
             inds = SA[2 * col - 1, 2 * col, 2*row - 1, 2*row]
 
@@ -150,10 +148,10 @@ module Softbody
         end
     end
 
-    function compute_hessian!(hess, sim::Simulation, D_1, a=0.01)
+    function compute_hessian!(hess, sim::Simulation, D_1, A, a=0.01)
         N_p = size(sim.X)[1] ÷ 2
         N_t = size(sim.ind)[1]
-        N_a = size(sim.a)[1]
+        N_a = size(A)[1]
 
         #per-triangle gradient
         for ti = 1:N_t
@@ -172,7 +170,7 @@ module Softbody
         for ai = 1:N_a
             row = sim.actuators_i[ai]
             col = sim.actuators_j[ai]
-            act = sim.a[ai]
+            act = A[ai]
 
             inds = [2 * col - 1, 2 * col, 2*row - 1, 2*row]
 
@@ -201,8 +199,8 @@ module Softbody
         end
     end
 
-    function dfda(D, A)
-        grad = zeros(length(sim.X), length(sim.a))
+    function dfda(D_1, A)
+        grad = zeros(length(sim.X), length(A))
 
         # per-actuation gradient
         for ai = 1:N_a
@@ -229,40 +227,24 @@ module Softbody
         grad = zeros(size(x))
         hess = zeros(length(sim.X), length(sim.X))
 
+        delta = 0
+
         for _ in 1:iterations
             grad .= 0
             hess .= 0
             gradient!(grad, x)
             hessian!(hess, x)
 
-            x .= x .- cg(hess, grad)
+            delta = cg(hess, grad)
+        
+            x = x - delta
 
-            if norm(grad) * sim.dt^2 < tol
+            if norm(delta) * sim.dt^2 < tol
                 break
             end
-        end
-        
-        if norm(grad) * sim.dt^2 > tol
-            @printf "|∇E| = %.1e\n" norm(grad) * sim.dt^2
         end
 
         return x
     end 
-
-    function step!(sim::Simulation, a::Vector; tol=1e-6)
-        sim.a = a
-   
-        D = newton(
-            sim,
-            (h, d) -> compute_hessian!(h, sim, d),
-            (g, d) -> compute_gradient!(g, sim, d),
-            sim.D,
-            tol,
-            2
-        )
-
-        sim.V .= (D .- sim.D) ./ sim.dt
-        sim.D .= D
-    end
 end
 

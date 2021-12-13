@@ -18,7 +18,7 @@ mutable struct NeuralNet{S <: AbstractFloat,I <: Integer}
 
 end
 
-#NeuralNet(i, hl, o) = NeuralNet(i, hl, o, randn(hl, i), randn(hl), randn(o, hl), randn(o)) Does not work - Random actuations are too far off from equilibrium
+#NeuralNet(i, hl, o) = NeuralNet(i, hl, o, randn(hl, i), randn(hl), randn(o, hl), randn(o)) #Does not work - Random actuations are too far off from equilibrium
 NeuralNet(i, hl, o) = NeuralNet(i, hl, o, zeros(hl, i), zeros(hl), zeros(o, hl), ones(o))
 
 function relu(x)
