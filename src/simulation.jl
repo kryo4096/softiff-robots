@@ -35,7 +35,7 @@ module Simulation
             end
         end
         
-        return reward(sim, direction[])
+        return reward(sim.X[i] .+ sim.D[i], direction[])
     end
 
     function run(filename)

@@ -30,6 +30,9 @@ module Softbody
         actuators_j::Vector{I}
         a::Vector{S}
         spring_stiffness::S
+
+        hessian::SparseMatrixCSC{S, I}
+        actuation_hessian::SparseMatrixCSC{S, I}
     end 
 
     function create_simulation(vertices::Vector, indices::Vector, actuators::Vector, ;g=9.8, floor_force=1e4, floor_height=0.0, floor_friction=1e2, dt=1e-3, lambda=1e5, mu=1e5, spring_stiffness=1e2, m = 1)
@@ -50,7 +53,7 @@ module Softbody
         A_inv = Vector(inv.(A))
         vol = abs.(0.5 * det.(A))
 
-        Simulation(g, floor_force, floor_height, floor_friction, dt, vertices, D, V, M, ind, A_inv, vol, lambda_vec, mu_vec, actuators_i, actuators_j, a, spring_stiffness)
+        Simulation(g, floor_force, floor_height, floor_friction, dt, vertices, D, V, M, ind, A_inv, vol, lambda_vec, mu_vec, actuators_i, actuators_j, a, spring_stiffness, spzeros(length(vertices), length(vertices)), spzeros(length(vertices), length(vertices)))
     end
 
     function render_verts(sim::Simulation)
@@ -199,13 +202,37 @@ module Softbody
         return hess
     end
 
+    function compute_actuation_hessian!(sim, act_hess)
+        N_a = size(sim.a)[1]
+
+        #Threads.@threads for ai = 1:N_a
+        for ai = 1:N_a
+            row = sim.actuators_i[ai]
+            col = sim.actuators_j[ai]
+
+            inds = [2 * col - 1, 2 * col, 2*row - 1, 2*row]
+
+            x_0 = sim.X[inds]
+            d_1 = sim.D[inds]
+
+            En(a) = actuation_energy(d_1, sim.spring_stiffness, x_0, a, sim.dt)
+
+            contrib_a = ForwardDiff.hessian(En, sim.a)
+
+            #lock(lk) do 
+                act_hess[inds, inds] += contrib_a
+            #end
+        end
+    end
+
     function compute_hessian!(hess, sim::Simulation, D_1, a=0.01)
         N_p = size(sim.X)[1] ÷ 2
         N_t = size(sim.ind)[1]
         N_a = size(sim.a)[1]
 
         lk = ReentrantLock()
-
+ 
+        
         init_hessian!(hess, sim, 0)
 
         # per-triangle gradient
@@ -314,11 +341,20 @@ module Softbody
             tol
         )
 
+        act_hess = compute_actuation_hessian!(sim, spzeros(length(sim.X), length(sim.X)))
+
         sim.V .= (D .- sim.D) ./ sim.dt
         sim.D .= D
+        sim.hessian = hessian
+
+        act_hess = compute_actuation_hessian!(sim, spzeros(length(sim.X), length(sim.X)))
+        sim.actuation_hessian = act_hess
     end
 
     function simulation_gradient(sim, a)
+        dLdxT = transpose(gradient(reward, sim.X .+ sim.D, [0, 0])) #TODO CHECK IF THIS IS CORRECT DIRECTION
+        AT = sim.hessian \ dLdxT
+        dfda = 
         return ones(size(a))
     end
 

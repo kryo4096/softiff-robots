@@ -45,12 +45,12 @@ function update(nn::NeuralNet, loss)
     nn.b2 += learning_rate * dnn.b2
 end
 
-function reward(sim, dir)
+function reward(pos, dir)
     com = [0, 0]
 
-    for i = 1:2:length(sim.X)
-        com += [sim.X[i] + sim.D[i], sim.X[i+1] + sim.D[i+1]]
+    for i = 1:2:length(pos)
+        com += [pos[i], pos[i+1]]
     end
-    com /= 0.5*size(sim.X)[1]
+    com /= 0.5*size(pos)[1]
     return com[1]*dir[1] + com[2]*dir[2]
 end

@@ -10,3 +10,5 @@ end
 function run_simulation(filename=PROJECT_LOCATION * "/../robots/simple_walker.json")
     Simulation.run(filename)
 end
+
+run_simulation()
