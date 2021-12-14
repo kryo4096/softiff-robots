@@ -2,6 +2,13 @@ module Simulation
     using JSON
     using GLMakie
     using LinearAlgebra
+    using ChainRulesCore
+    using IterativeSolvers
+    
+    import ChainRulesCore.rrule
+    import ChainRulesCore.NoTangent
+    import ChainRulesCore.Tangent
+    import ChainRulesCore.ZeroTangent
 
     include("softbody.jl")
     include("neural_net.jl")
@@ -19,9 +26,6 @@ module Simulation
 
         vertices, indices, actuators
     end
-
-    nestlevel() = 0
-    Zygote.@adjoint nestlevel() = nestlevel()+1, _ -> nothing
 
     function plot_actuators(fig_location, a, vertices)
 
@@ -53,41 +57,45 @@ module Simulation
 
     end
 
+    function step(a, sim) 
+        Softbody.newton(
+            sim,
+            (h, d) -> Softbody.compute_hessian!(h, sim, d, a),
+            (g, d) -> Softbody.compute_gradient!(g, sim, d, a),
+            sim.D,
+            1e-6,
+            2
+        )
+    end
+
+    
+    function rrule(::typeof(step), a, sim)
+        function dDdA(y)
+            hess = zeros(length(sim.X), length(sim.X)) 
+            d_1 = step(a, sim)
+            Softbody.compute_hessian!(hess, sim, d_1, a)
+            g = -hess \ Softbody.dfda(sim, d_1, a)
+            (NoTangent(), g'*y, ZeroTangent())
+        end
+
+        return step(a, sim), dDdA
+    end
+
     function run_simulation(sim::Softbody.Simulation, mv, nn)
         iter = 0
 
+        s = deepcopy(sim)
+
         while iter < 100
-            a = get_actuation(nn, [sim.X + sim.D;sim.V])
+            a = get_actuation(nn, [s.X + s.D;s.V])
 
-            function D_1(a) 
-                print(nestlevel())
-                Softbody.newton(
-                    sim,
-                    (h, d) -> Softbody.compute_hessian!(h, sim, d, a),
-                    (g, d) -> Softbody.compute_gradient!(g, sim, d, a),
-                    sim.D,
-                    1e-6,
-                    2
-                )
-            end
-
-            function dDdA(a, D1F)
-                hess = zeros(length(sim.X), length(sim.X))
-                
-                d_1 = D1F(a)
-                Softbody.compute_hessian!(hess, sim, d_1, a)
-                cg(hess, Softbody.dfda(d_1, a))
-            end
-
-            eval("Zygote.@adjoint D_1(a)=D_1(a), y->(dDdA(a, D_1)*y,)")
-
-            D = D_1(a)
-            sim.V = (D - sim.D) / sim.dt
-            sim.D = D
+            D = step(a, s)
+            s.V = (D - s.D) / s.dt
+            s.D = D
 
             Zygote.ignore() do
                 if iter%10==0
-                    mv[] = Softbody.render_verts(sim)
+                    mv[] = Softbody.render_verts(s)
                     sleep(0.001)
                 end
             end
@@ -95,7 +103,7 @@ module Simulation
             iter += 1
         end
 
-        sim.D
+        s.D
     end
 
     function run(filename)
@@ -127,8 +135,8 @@ module Simulation
 
         display(fig)
 
-        x(nn) = run_simulation(sim, mv, nn)
-        Zygote.jacobian(x, nn)
+        x(nn) = run_simulation(sim, mv, nn)[1]
+        Zygote.gradient(x, nn)
     end
 
 end

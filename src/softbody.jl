@@ -199,8 +199,9 @@ module Softbody
         end
     end
 
-    function dfda(D_1, A)
+    function dfda(sim, D_1, A)
         grad = zeros(length(sim.X), length(A))
+        N_a = size(A)[1]
 
         # per-actuation gradient
         for ai = 1:N_a
@@ -214,12 +215,14 @@ module Softbody
             d_1 = D_1[inds]
 
             function E(d)
-                E(a) = actuation_energy(d, sim.spring_stiffness, x_0, a, sim.dt)
-                return ForwardDiff.gradient(E1, act)
+                E1(a) = actuation_energy(d, sim.spring_stiffness, x_0, a, sim.dt)
+                return ForwardDiff.derivative(E1, act)
             end
             
             grad[inds, ai] += ForwardDiff.gradient(E, d_1)
         end
+
+        grad
     end
 
     function newton(sim, hessian!, gradient!, x_guess, tol, iterations)
@@ -235,7 +238,7 @@ module Softbody
             gradient!(grad, x)
             hessian!(hess, x)
 
-            delta = cg(hess, grad)
+            delta = hess \ grad
         
             x = x - delta
 
