@@ -30,7 +30,7 @@ module Softbody
         spring_stiffness::S
     end 
 
-    function create_simulation(vertices::Vector, indices::Vector, actuators::Vector ;g=1e2, floor_force=5e3, floor_height=0.0, floor_friction=1e1, dt=0.001, lambda=1e4, mu=1e4, spring_stiffness=2e3, m = 1)
+    function create_simulation(vertices::Vector, indices::Vector, actuators::Vector ;g=1e2, floor_force=5e3, floor_height=0.0, floor_friction=1e1, dt=0.001, lambda=5e3, mu=5e3, spring_stiffness=2e3, m = 1)
         D = zeros(size(vertices))
         V = zeros(size(vertices))
         M = ones(size(vertices)[1]÷2) * m

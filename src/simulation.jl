@@ -81,7 +81,7 @@ module Simulation
         return step(a, sim), dDdA
     end
 
-    function run_simulation(sim::Softbody.Simulation, mv, nn, max_iter=2000)
+    function run_simulation(sim::Softbody.Simulation, mv, nn, max_iter=2000, k = 10)
         iter = 0
 
         s = deepcopy(sim)
@@ -108,7 +108,7 @@ module Simulation
 
             Zygote.ignore() do
                 #display(a)
-                if iter%10==0
+                if iter%k==0
                     mv[] = Softbody.render_verts(s)
                     sleep(0.0005)
                 end
@@ -167,14 +167,14 @@ module Simulation
                 -com[1]
             end
 
-            x(nn) = get_com(run_simulation(sim, mv, nn))
+            x(nn) = get_com(run_simulation(sim, mv, nn, 1000, 10))
 
             grad = Zygote.gradient(x, nn)[1]
             update_nn(nn, grad, opt)
             println("Completed iteration $i")
         end
 
-        run_simulation(sim, mv, nn, 100000)
+        run_simulation(sim, mv, nn, 100000, 10)
 
         
     end
