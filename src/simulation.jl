@@ -64,7 +64,7 @@ module Simulation
             (g, d) -> Softbody.compute_gradient!(g, sim, d, a),
             sim.D,
             1e-6,
-            2
+            10
         )
     end
 
@@ -86,14 +86,17 @@ module Simulation
 
         s = deepcopy(sim)
 
-        while iter < 100
+        while iter < 5000
             a = get_actuation(nn, [s.X + s.D;s.V])
+
+            
 
             D = step(a, s)
             s.V = (D - s.D) / s.dt
             s.D = D
 
             Zygote.ignore() do
+                #display(a)
                 if iter%10==0
                     mv[] = Softbody.render_verts(s)
                     sleep(0.001)
@@ -113,7 +116,7 @@ module Simulation
 
         v, i, a = robot
 
-        nn = NeuralNet(2*size(v)[1], 32, size(a)[1])
+        nn = NeuralNet(2*length(v), 32, length(a))
 
         fig = Figure()
 
@@ -134,9 +137,14 @@ module Simulation
         plot_actuators(fig[1,1], a, mv)
 
         display(fig)
-
-        x(nn) = run_simulation(sim, mv, nn)[1]
-        Zygote.gradient(x, nn)
+        
+        for i = 1:1000
+            x(nn) = run_simulation(sim, mv, nn)[1]
+            grad = Zygote.gradient(x, nn)[1]
+            update_nn(nn, grad)
+            display(nn.b2)
+            println("Completed iteration $i")
+        end
     end
 
 end
