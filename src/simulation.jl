@@ -64,8 +64,8 @@ module Simulation
             (h, d) -> Softbody.compute_hessian!(h, sim, d, a),
             (g, d) -> Softbody.compute_gradient!(g, sim, d, a),
             sim.D,
-            1e-6,
-            10
+            0.0,
+            5
         )
     end
     
@@ -75,7 +75,7 @@ module Simulation
             d_1 = step(a, sim)
             Softbody.compute_hessian!(hess, sim, d_1, a)
             g = -hess \ Softbody.dfda(sim, d_1, a)
-            (NoTangent(), y'*g, ZeroTangent())
+            (NoTangent(), g'*y, ZeroTangent())
         end
 
         return step(a, sim), dDdA
@@ -108,7 +108,7 @@ module Simulation
 
             Zygote.ignore() do
                 #display(a)
-                if iter%1==0
+                if iter%10==0
                     mv[] = Softbody.render_verts(s)
                     sleep(0.0005)
                 end
@@ -155,7 +155,7 @@ module Simulation
 
         display(fig)
 
-        opt = Flux.Optimiser(ClipValue(1e3), Flux.Optimise.ADAM(0.01, (0.9, 0.999)))
+        opt = Flux.Optimiser(ClipValue(1e3), Flux.Optimise.ADAM(0.1, (0.9, 0.999)))
         
         for i = 1:30
             function get_com(pos)
@@ -170,10 +170,7 @@ module Simulation
             x(nn) = get_com(run_simulation(sim, mv, nn))
 
             grad = Zygote.gradient(x, nn)[1]
-            #display(grad)
-            #b = nn.b2
             update_nn(nn, grad, opt)
-            #display([b - nn.b2, nn.b2])
             println("Completed iteration $i")
         end
 

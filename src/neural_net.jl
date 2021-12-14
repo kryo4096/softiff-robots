@@ -20,10 +20,10 @@ mutable struct NeuralNet{S <: AbstractFloat,I <: Integer}
 end
 
 
-c = 0.5
+c = 0.1
 
 #NeuralNet(i, hl, o) = NeuralNet(i, hl, o, randn(hl, i), randn(hl), randn(o, hl), randn(o)) #Does not work - Random actuations are too far off from equilibrium
-NeuralNet(i, hl, o) = NeuralNet(i, hl, o, c*randn(hl, i), c*randn(hl), c*randn(o, hl), c * randn(o)) 
+NeuralNet(i, hl, o) = NeuralNet(i, hl, o, c*randn(hl, i), c*randn(hl), c*randn(o, hl), ones(o)) 
 #NeuralNet(i, hl, o) = NeuralNet(i, hl, o, zeros(hl, i), zeros(hl), zeros(o, hl), ones(o))
 
 function relu(x)
@@ -42,8 +42,8 @@ function leaky_relu(x)
     end
 end
 
-function tan_h(x)
-    return tanh(x) + 1 + 0.01relu(x-1)
+function sig(x)
+    return 2*sigmoid(x/2)+0.1# + 0.01relu(x-1)
 end
 
 function id(x)
@@ -54,7 +54,7 @@ end
 
 function get_actuation(nn, input)
     f(x) = leaky_relu(x)
-    g(x) = tan_h(x)
+    g(x) = sig(x)
     return g.(f.(nn.w2*f.(nn.w1*input .+ nn.b1) .+ nn.b2))
 end
 

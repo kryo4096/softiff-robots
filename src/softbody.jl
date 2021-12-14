@@ -30,7 +30,7 @@ module Softbody
         spring_stiffness::S
     end 
 
-    function create_simulation(vertices::Vector, indices::Vector, actuators::Vector, ;g=1e1, floor_force=5e3, floor_height=0.0, floor_friction=5e2, dt=0.005, lambda=2e3, mu=2e3, spring_stiffness=3e2, m = 1)
+    function create_simulation(vertices::Vector, indices::Vector, actuators::Vector ;g=1e2, floor_force=5e3, floor_height=0.0, floor_friction=1e1, dt=0.001, lambda=1e4, mu=1e4, spring_stiffness=2e3, m = 1)
         D = zeros(size(vertices))
         V = zeros(size(vertices))
         M = ones(size(vertices)[1]÷2) * m
@@ -66,12 +66,12 @@ module Softbody
     edge_mat(x) = SA[x[3] - x[1] x[5] - x[1]
                     x[4] - x[2] x[6] - x[2]]
 
-    function triangle_energy(d, A_inv, x_0, a, lambda, mu)
+    function triangle_energy(d, A_inv, x_0, a, lambda, mu, dt)
         F = edge_mat(x_0 + d) * A_inv
         dF = det(F)
         lJ = dF > a ? log(dF) : log(a) + 1 / a * (dF - a) - 1 / a^2 * (dF - a)^2
         E = mu * (0.5 * (tr(F' * F) - 3.0) - lJ) + 0.5 * lambda * lJ^2
-        return E
+        return E* dt^2
     end
 
     function actuation_energy(d, spring_stiffness, x_0, actuation, dt)
@@ -83,7 +83,7 @@ module Softbody
 
         E = 0.5 * spring_stiffness * (current_length/(initial_length * actuation) - 1)^2
 
-        return E
+        return E* dt^2
     end
 
     function vertex_energy(d, d_0, v_0, x_0, dt, m, floor_height, floor_force, floor_friction, g)  
@@ -95,7 +95,7 @@ module Softbody
         E += g * m * relu(p[2] - floor_height)
         E += floor_force * relu(floor_height - p[2])^2 + v[1]^2 * relu(floor_height - p[2]) * floor_friction
 
-        return I / dt^2 + E
+        return I  + E * dt^2
     end
 
     function compute_gradient!(grad, sim::Simulation, D_1, A, a=0.01)
@@ -112,7 +112,7 @@ module Softbody
             x_0 = sim.X[inds]
             d_1 = D_1[inds]
 
-            E(d) = triangle_energy(d, sim.A_inv[ti], x_0, a, sim.lambda[ti], sim.mu[ti])
+            E(d) = triangle_energy(d, sim.A_inv[ti], x_0, a, sim.lambda[ti], sim.mu[ti], sim.dt)
 
             grad[inds] += sim.vol[ti] * ForwardDiff.gradient(E, d_1)
         end
@@ -161,7 +161,7 @@ module Softbody
             x_0 = sim.X[inds]
             d_1 = D_1[inds]
 
-            E(d) = triangle_energy(d, sim.A_inv[ti], x_0, a, sim.lambda[ti], sim.mu[ti])
+            E(d) = triangle_energy(d, sim.A_inv[ti], x_0, a, sim.lambda[ti], sim.mu[ti], sim.dt)
 
             hess[inds, inds] .+= sim.vol[ti] * ForwardDiff.hessian(E, d_1)
         end
